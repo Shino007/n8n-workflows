@@ -42,4 +42,4 @@ See [docs/CONVENTIONS.md](docs/CONVENTIONS.md) for naming, tagging and error-han
 - **Never commit credentials.** Exports contain credential *references* (ID + name) only — keep it that way. Secrets live in n8n's credential store.
 - `scripts/clean.py` redacts hard-coded keys to `REDACTED_*` on export. A file containing a placeholder means that workflow still has a secret pasted into a node — move it to a credential. `import.sh` refuses to push such files.
 - One workflow per file, filename = slug of the workflow name.
-- Every production workflow has an error workflow set (`shared/error-handler`).
+- Every production workflow has an error workflow set (`workflows/shared/shared-error-handler.json`, alerts on Telegram).
