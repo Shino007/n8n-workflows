@@ -1,0 +1,622 @@
+{
+  "id": "gwxEUWTKBgWLXYS0",
+  "name": "PromoMag Featured Image Swap",
+  "active": true,
+  "tags": [],
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "nodes": [
+    {
+      "id": "2315413c-cee0-424a-84b1-62dda25e87b1",
+      "name": "Called by PromoMag Bot",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "8cbf665e-a074-4738-aa6c-c8680f851b55",
+      "name": "Normalise Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const j = $input.first().json || {};\nconst chatId = j.chatId || 8271099427;\n\nconst raw = String(j.query || '').trim();\nconst cleaned = raw.replace(/[^a-zA-Z0-9 ]/g, ' ').replace(/\\s+/g, ' ').trim();\n\n// Pixabay ANDs its search terms, so a long phrase returns nothing and the run dead-ends\n// on an empty hits array. Three words is the ceiling that reliably returns results.\nconst words = cleaned.split(' ').filter(w => w.length > 1).slice(0, 3);\nconst query = words.join(' ');\n\nif (!query) {\n  return [{ json: { chatId, query: '', valid: false, reason: 'No search term given. Send: image <search term>' } }];\n}\n\nreturn [{ json: { chatId, query, valid: true, reason: '' } }];"
+      }
+    },
+    {
+      "id": "a9c1c58c-feb8-4338-baf0-ef628ea2698c",
+      "name": "Fetch Latest Post",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://promomag.co.uk/wp-json/wp/v2/posts?per_page=1&orderby=date&order=desc&status=publish,draft&_fields=id,title,link,featured_media,status",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "jkmcRGFCJbTsbiYb",
+          "name": "n8n PromoMag"
+        }
+      }
+    },
+    {
+      "id": "6fe04413-c059-4002-9f8e-6a1959511811",
+      "name": "Fetch Pixabay",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "=https://pixabay.com/api/?key=REDACTED_API_KEY&q={{ encodeURIComponent($('Normalise Request').item.json.query) }}&image_type=photo&orientation=horizontal&min_width=1280&safesearch=true&per_page=10&order=popular",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "17f214e7-1801-4b4f-93f4-0f0b7e90cddc",
+      "name": "Prepare Candidate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const sd = $getWorkflowStaticData('global');\nconst req = $('Normalise Request').first().json;\nconst chatId = req.chatId;\n\nif (!req.valid) {\n  return [{ json: { chatId, ok: false, reason: req.reason } }];\n}\n\nlet post = {};\ntry { post = $('Fetch Latest Post').first().json || {}; } catch (e) { post = {}; }\nconst postId = post.id || 0;\nconst postTitle = (post.title && post.title.rendered) ? post.title.rendered : '';\nconst postStatus = post.status || '';\n\nif (!postId) {\n  return [{ json: { chatId, ok: false, reason: 'Could not read the most recent post from WordPress.' } }];\n}\n\nconst hits = ($input.first().json && $input.first().json.hits) ? $input.first().json.hits : [];\nconst hit = hits.find(h => h.largeImageURL || h.webformatURL);\n\nif (!hit) {\n  return [{ json: { chatId, ok: false, reason: 'No Pixabay results for \\\"' + req.query + '\\\". Try a broader term.' } }];\n}\n\n// The resume URL carries no authentication of its own, so anyone holding the link could\n// change the image. Mint a single-use token and require it on resume, the same way the\n// scheduled approval path does.\nconst confirmToken = Array.from({length:4},()=>Math.random().toString(36).slice(2,10)).join('');\nsd['imageSwapToken_' + chatId] = confirmToken;\n\nreturn [{ json: {\n  chatId,\n  ok: true,\n  query: req.query,\n  postId,\n  postTitle,\n  postStatus,\n  previousMediaId: post.featured_media || 0,\n  imageUrl: hit.largeImageURL || hit.webformatURL,\n  confirmToken\n} }];"
+      }
+    },
+    {
+      "id": "950cea48-89a0-412d-a2ae-0fe35faec302",
+      "name": "Candidate Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "ok-check",
+              "leftValue": "={{ $json.ok }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              },
+              "rightValue": true
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "e7b0f944-3610-49d8-9b1f-9d713b0e7434",
+      "name": "Send Image Preview",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1320,
+        -120
+      ],
+      "parameters": {
+        "operation": "sendPhoto",
+        "chatId": "={{ $json.chatId }}",
+        "binaryData": false,
+        "file": "={{ $json.imageUrl }}",
+        "replyMarkup": "inlineKeyboard",
+        "inlineKeyboard": {
+          "rows": [
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "Use this image",
+                    "additionalFields": {
+                      "url": "={{ $execution.resumeUrl }}{{ $execution.resumeUrl.includes('?') ? '&' : '?' }}action=apply&token={{ $json.confirmToken }}"
+                    }
+                  },
+                  {
+                    "text": "Cancel",
+                    "additionalFields": {
+                      "url": "={{ $execution.resumeUrl }}{{ $execution.resumeUrl.includes('?') ? '&' : '?' }}action=cancel&token={{ $json.confirmToken }}"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "appendAttribution": false,
+          "caption": "=*Set this as the featured image?*\n\nPost: {{ $json.postTitle }}\nStatus: {{ $json.postStatus }}\nSearch term: {{ $json.query }}\n\nThe current image stays in the media library either way."
+        }
+      },
+      "onError": "continueRegularOutput",
+      "webhookId": "e4ac3e06-2bff-4ce9-bdfd-16a5255671e9",
+      "credentials": {
+        "telegramApi": {
+          "id": "F7kV4EHRCT4GkYho",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "id": "f9976162-87b1-412e-8647-2b53db15f20a",
+      "name": "Wait for Confirm",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1540,
+        -120
+      ],
+      "parameters": {
+        "resume": "webhook",
+        "limitWaitTime": true,
+        "resumeAmount": 1,
+        "resumeUnit": "hours",
+        "options": {}
+      },
+      "webhookId": "7345d9ad-5eae-464f-aa73-0cbc29bc6dfa"
+    },
+    {
+      "id": "136204f9-4fac-48b9-a042-ee7efea6d11f",
+      "name": "Confirm Router",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        -120
+      ],
+      "parameters": {
+        "jsCode": "const sd = $getWorkflowStaticData('global');\nconst cand = $('Prepare Candidate').first().json;\nconst chatId = cand.chatId;\nconst q = ($input.first().json || {}).query || {};\n\nconst expected = cand.confirmToken || sd['imageSwapToken_' + chatId] || '';\nconst tokenOk = !!expected && String(q.token || '') === expected;\n\n// Single use either way, so a replayed link cannot swap the image a second time.\ndelete sd['imageSwapToken_' + chatId];\n\nconst action = tokenOk ? String(q.action || '').toLowerCase() : '';\nconst apply = action === 'apply';\n\nreturn [{ json: Object.assign({}, cand, { action, apply, tokenOk }) }];"
+      }
+    },
+    {
+      "id": "9a85a61e-62b0-40b2-96fa-2f3be077d748",
+      "name": "Confirmed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        -120
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "apply-check",
+              "leftValue": "={{ $json.apply }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              },
+              "rightValue": true
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "0ce77096-459c-4406-a79e-4a2af29b8461",
+      "name": "Download Image",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2200,
+        -240
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.imageUrl }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "imageData"
+            }
+          },
+          "timeout": 20000
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "c6bfdc14-13dc-457b-8eaf-fb8f4608c6b8",
+      "name": "Upload Replacement Media",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2420,
+        -240
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://promomag.co.uk/wp-json/wp/v2/media",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Disposition",
+              "value": "=attachment; filename=\"promomag-featured-{{ Date.now() }}.jpg\""
+            },
+            {
+              "name": "Content-Type",
+              "value": "={{ $binary.imageData.mimeType || \"image/jpeg\" }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "imageData",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "jkmcRGFCJbTsbiYb",
+          "name": "n8n PromoMag"
+        }
+      }
+    },
+    {
+      "id": "bccac794-2bd7-4246-a720-8abeeb8a752a",
+      "name": "Set Featured Media",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2640,
+        -240
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://promomag.co.uk/wp-json/wp/v2/posts/{{ $('Confirm Router').item.json.postId }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={ \"featured_media\": {{ $json.body.id || 0 }} }",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "jkmcRGFCJbTsbiYb",
+          "name": "n8n PromoMag"
+        }
+      }
+    },
+    {
+      "id": "3ce26ef2-3d57-4de8-8987-db93dd62f7ee",
+      "name": "Send Applied Confirmation",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2860,
+        -320
+      ],
+      "parameters": {
+        "chatId": "={{ $('Confirm Router').item.json.chatId }}",
+        "text": "=*Featured image updated*\n\n{{ $('Confirm Router').item.json.postTitle }}\n\nNew media ID: {{ $json.body.featured_media }}\nThe previous image (ID {{ $('Confirm Router').item.json.previousMediaId }}) is still in the media library.\n\n{{ $json.body.link }}",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "appendAttribution": false
+        }
+      },
+      "webhookId": "6b40738f-ba64-4e41-8f9b-53afa046a0ca",
+      "credentials": {
+        "telegramApi": {
+          "id": "F7kV4EHRCT4GkYho",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "id": "54eeac85-da9a-4d8d-a96b-129d2f27dc2c",
+      "name": "Send Cancelled",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2200,
+        0
+      ],
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "=*Image swap cancelled*\n\n{{ $json.postTitle }} keeps its current featured image.",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "appendAttribution": false
+        }
+      },
+      "webhookId": "489e404e-a8fd-49cc-bb32-fd8e7d70dfdf",
+      "credentials": {
+        "telegramApi": {
+          "id": "F7kV4EHRCT4GkYho",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "id": "c14f9e95-a0b7-456d-83d5-678252a143f6",
+      "name": "Send No Candidate",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1320,
+        120
+      ],
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "=*Could not swap the image*\n\n{{ $json.reason }}",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "appendAttribution": false
+        }
+      },
+      "webhookId": "ee67212b-5c9e-4c40-a4d5-38308b0413c7",
+      "credentials": {
+        "telegramApi": {
+          "id": "F7kV4EHRCT4GkYho",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "id": "4d91ddf7-eba3-48d1-a524-33c4333d1a87",
+      "name": "Send Swap Failed",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2860,
+        -160
+      ],
+      "parameters": {
+        "chatId": "={{ $('Confirm Router').item.json.chatId }}",
+        "text": "=*Featured image not changed*\n\nThe post is untouched. Send the command again to retry.\n\n_{{ JSON.stringify($json.error || $json).replace(/[_*\\[\\]`]/g, \" \").slice(0, 200) }}_",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "appendAttribution": false
+        }
+      },
+      "webhookId": "8a75c677-852c-4844-8464-f93469bc389d",
+      "credentials": {
+        "telegramApi": {
+          "id": "F7kV4EHRCT4GkYho",
+          "name": "Telegram account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Called by PromoMag Bot": {
+      "main": [
+        [
+          {
+            "node": "Normalise Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalise Request": {
+      "main": [
+        [
+          {
+            "node": "Fetch Latest Post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Latest Post": {
+      "main": [
+        [
+          {
+            "node": "Fetch Pixabay",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Pixabay": {
+      "main": [
+        [
+          {
+            "node": "Prepare Candidate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Candidate": {
+      "main": [
+        [
+          {
+            "node": "Candidate Found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Candidate Found?": {
+      "main": [
+        [
+          {
+            "node": "Send Image Preview",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send No Candidate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Image Preview": {
+      "main": [
+        [
+          {
+            "node": "Wait for Confirm",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait for Confirm": {
+      "main": [
+        [
+          {
+            "node": "Confirm Router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Confirm Router": {
+      "main": [
+        [
+          {
+            "node": "Confirmed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Confirmed?": {
+      "main": [
+        [
+          {
+            "node": "Download Image",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Cancelled",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Image": {
+      "main": [
+        [
+          {
+            "node": "Upload Replacement Media",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload Replacement Media": {
+      "main": [
+        [
+          {
+            "node": "Set Featured Media",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Featured Media": {
+      "main": [
+        [
+          {
+            "node": "Send Applied Confirmation",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Swap Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "meta": {
+    "aiBuilderAssisted": true,
+    "builderVariant": "mcp"
+  }
+}

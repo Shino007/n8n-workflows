@@ -1,0 +1,412 @@
+{
+  "id": "uXSxWMjb9leUPbkJ",
+  "name": "SWBW Sign Up Notification",
+  "active": true,
+  "tags": [],
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "47e7cd60-28b0-450f-acf4-44dc5628f490",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -1104,
+        -80
+      ],
+      "id": "80584a68-5d7a-410e-aac7-a43f2c86ab41",
+      "name": "Webhook",
+      "webhookId": "47e7cd60-28b0-450f-acf4-44dc5628f490"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "5a22971a-0df2-4f4f-85f1-8e6c90a6a0b8",
+              "name": "First Name",
+              "value": "={{ $json.body.name_1_first_name }}",
+              "type": "string"
+            },
+            {
+              "id": "c26ff62a-37fe-4771-a294-14a09834558a",
+              "name": "Last Name",
+              "value": "={{ $json.body.name_1_last_name }}",
+              "type": "string"
+            },
+            {
+              "id": "52ec3154-4023-4c88-8558-76ae368c44c6",
+              "name": "Email",
+              "value": "={{ $json.body.email_2 }}",
+              "type": "string"
+            },
+            {
+              "id": "ca3eb19c-b3e4-45e0-8ad0-e0b9e1277c16",
+              "name": "Phone",
+              "value": "={{ $json.body.phone_1.toString().replace(/\\D/g,'').startsWith('44') ? $json.body.phone_1.toString().replace(/\\D/g,'') : $json.body.phone_1.toString().replace(/\\D/g,'').replace(/^0/,'44') }}",
+              "type": "string"
+            },
+            {
+              "id": "c8fa625a-805c-4f32-b7b9-b695f1606677",
+              "name": "Medical History",
+              "value": "={{ $json.body.textarea_1 }}",
+              "type": "string"
+            },
+            {
+              "id": "047a0ef7-60dc-4333-908a-81b14ea40961",
+              "name": "Gender",
+              "value": "={{ $json.body.select_1 }}",
+              "type": "string"
+            },
+            {
+              "id": "2c368627-63f2-4c11-ac52-ffdfe7ee3974",
+              "name": "Informed Consent",
+              "value": "={{ $json.body.consent_1 }}",
+              "type": "string"
+            },
+            {
+              "id": "952c503b-b1b1-449c-9748-71693a3f9b45",
+              "name": "Media Consent",
+              "value": "={{ $json.body.consent_2 }}",
+              "type": "string"
+            },
+            {
+              "id": "09c2f341-c3ae-4a25-a6a8-466b256c3f8c",
+              "name": "Submission date",
+              "value": "={{ $json.body.entry_time }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -896,
+        -80
+      ],
+      "id": "028b11b2-9ff5-4e4b-b19a-d9ede98e544b",
+      "name": "Edit Fields"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1UZurVidYpaUabxvFok7_FDPvCLwc8Ld12jn-iNhEIfQ",
+          "mode": "list",
+          "cachedResultName": "SWBW Signups",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1UZurVidYpaUabxvFok7_FDPvCLwc8Ld12jn-iNhEIfQ/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1UZurVidYpaUabxvFok7_FDPvCLwc8Ld12jn-iNhEIfQ/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "First Name",
+              "displayName": "First Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Last Name",
+              "displayName": "Last Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Email",
+              "displayName": "Email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Phone",
+              "displayName": "Phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Medical History",
+              "displayName": "Medical History",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Gender",
+              "displayName": "Gender",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Informed Consent",
+              "displayName": "Informed Consent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Media Consent",
+              "displayName": "Media Consent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Submission date",
+              "displayName": "Submission date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -688,
+        -80
+      ],
+      "id": "2fe378f9-5284-49fc-a682-3990d3685d34",
+      "name": "Append row in sheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "JVRJc4HY0SN1ofOa",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1UZurVidYpaUabxvFok7_FDPvCLwc8Ld12jn-iNhEIfQ",
+          "mode": "list",
+          "cachedResultName": "SWBW Signups",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1UZurVidYpaUabxvFok7_FDPvCLwc8Ld12jn-iNhEIfQ/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1UZurVidYpaUabxvFok7_FDPvCLwc8Ld12jn-iNhEIfQ/edit#gid=0"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -432,
+        -256
+      ],
+      "id": "5abc0aeb-ec86-4b11-93f8-661898c77fa3",
+      "name": "Get row(s) in sheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "JVRJc4HY0SN1ofOa",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return [items[items.length - 1]];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -224,
+        -256
+      ],
+      "id": "1c607c7f-7f81-4c21-8e1f-5ddcae27fc76",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendTemplate",
+        "messagingProduct": "whatsapp",
+        "phoneNumberId": "=1056839477506276",
+        "recipientPhoneNumber": "={{ $json.Phone }}",
+        "template": "website_signup_confirmation|en_US",
+        "components": {
+          "component": [
+            {
+              "type": "body",
+              "bodyParameters": {
+                "parameter": [
+                  {
+                    "type": "text",
+                    "text": "={{ $json['First Name'] }}"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1.1,
+      "position": [
+        -432,
+        112
+      ],
+      "id": "62d72012-1df6-40da-be03-bf337a5fcc61",
+      "name": "Send template",
+      "webhookId": "8143eade-70a1-4140-806b-90087730b558",
+      "credentials": {
+        "whatsAppApi": {
+          "id": "89v9CFiw2QHXnxEh",
+          "name": "WhatsApp account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "phoneNumberId": "=1056839477506276",
+        "recipientPhoneNumber": "=+447713822982",
+        "template": "notify_of_signup|en"
+      },
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1.1,
+      "position": [
+        -32,
+        -256
+      ],
+      "id": "9a474406-ed1a-46f0-ab9f-3a45958b92ab",
+      "name": "Send template1",
+      "webhookId": "8143eade-70a1-4140-806b-90087730b558",
+      "credentials": {
+        "whatsAppApi": {
+          "id": "89v9CFiw2QHXnxEh",
+          "name": "WhatsApp account 2"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields": {
+      "main": [
+        [
+          {
+            "node": "Append row in sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append row in sheet": {
+      "main": [
+        [
+          {
+            "node": "Send template",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get row(s) in sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get row(s) in sheet": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Send template1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send template": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "aiBuilderAssisted": true,
+    "builderVariant": "mcp"
+  }
+}

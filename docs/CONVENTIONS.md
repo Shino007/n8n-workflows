@@ -2,9 +2,9 @@
 
 ## Naming
 
-`[AREA] Verb Object (trigger)` — e.g. `[JIRA] Route new tickets (webhook)`, `[AIRTABLE] Sync clients nightly (cron)`.
+`[AREA] Verb Object (trigger)` — e.g. `[PROMOMAG] Generate article (telegram)`, `[SLA] Send alert digest (cron)`.
 
-Filename is the slugified name: `jira-route-new-tickets-webhook.json`.
+Filename is the slugified name: `promomag-generate-article-telegram.json`. Duplicate names get a short ID suffix.
 
 ## Tags (set in n8n)
 
@@ -12,13 +12,13 @@ Filename is the slugified name: `jira-route-new-tickets-webhook.json`.
 |---|---|
 | `prod` / `dev` | Environment status |
 | `owner:<name>` | Accountable person |
-| `area:<jira\|airtable\|ai\|wordpress>` | Matches folder |
+| `area:<project>` | Matches folder (promomag, sla-manager, swbw, …) |
 | `critical` | Pages someone on failure |
 
 ## Build standards
 
 - **Error handling:** set *Settings → Error workflow* to `[SHARED] Error handler`. Critical flows alert to Slack/Teams.
-- **Idempotency:** any workflow that writes (Jira, Airtable, WP) must be safe to re-run — check-before-create or upsert.
+- **Idempotency:** any workflow that writes (Airtable, WordPress, Notion) must be safe to re-run — check-before-create or upsert.
 - **Secrets:** use n8n credentials only. No API keys in Code nodes, HTTP headers or expressions.
 - **Sticky note** at the top of each workflow: purpose, owner, trigger, downstream systems.
 - **AI nodes:** pin the model version, cap max tokens, log inputs/outputs for audit where data allows.

@@ -1,0 +1,436 @@
+{
+  "id": "KrhrVE8oID54mNlq",
+  "name": "Article creator",
+  "active": false,
+  "tags": [],
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "Category: {{$json.state.category}}",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "You are PromoMag.co.uk’s professional editorial research assistant.\n\nYour job is to identify high-interest, trending news-feature topics for a UK and/or USA audience across four categories:\n\n1) Business & Finance\n2) Entertainment & Arts\n3) Environment & Nature\n4) Science & Technology\n\nFor EACH category:\n\nSTEP 1 — Research Phase\nIdentify 5 trending, high-interest topics currently being covered by credible, mainstream or authoritative sources such as:\nAssociated Press, Reuters, Bloomberg, Financial Times, CNN, BBC, Wired, official government datasets, regulatory bodies, or peer-reviewed publications.\n\nPrioritise:\n- Relevance to UK and/or USA readers\n- Timeliness (recent developments)\n- Search interest potential\n- Editorial depth (ability to produce a 1,200–1,500 word feature)\n\nSTEP 2 — Ranking\nFrom the 5 topics:\n- Select ONE as the recommended top topic.\n- Provide a short explanation (3–5 sentences) explaining why it was selected.\n  The rationale must reference:\n  - Relevance\n  - Timeliness\n  - Organic traffic potential\n  - Editorial strength\n\nSTEP 3 — Transparency\nList the remaining 4 topics as runner-ups.\n\nOUTPUT RULES:\n- Return valid JSON only.\n- Do not include commentary outside JSON.\n- Do not use markdown.\n- Use today’s date (YYYY-MM-DD) as batch_id.\n- Output must match the required structure.\n\nRequired output format:\n\n{\n  \"type\": \"daily_topic_research\",\n  \"batch_id\": \"YYYY-MM-DD\",\n  \"categories\": [\n    {\n      \"category\": \"Business & Finance\",\n      \"recommended_topic\": {\n        \"headline\": \"...\",\n        \"summary\": \"...\",\n        \"primary_sources\": [\"Reuters\", \"BBC\"],\n        \"rationale\": \"...\"\n      },\n      \"runner_up_topics\": [\n        { \"headline\": \"...\", \"summary\": \"...\", \"primary_sources\": [\"...\"] }\n      ]\n    }\n  ],\n  \"next_step\": \"await_user_selection\"\n}"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        496,
+        -496
+      ],
+      "id": "1bacb43f-da7a-4686-b55c-154a281abba9",
+      "name": "AI Agent",
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-5.3-codex",
+          "mode": "list",
+          "cachedResultName": "gpt-5.3-codex"
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        496,
+        -192
+      ],
+      "id": "426b9ed8-19f5-4bc9-97ca-6da1fd043722",
+      "name": "OpenAI Chat Model",
+      "alwaysOutputData": false,
+      "credentials": {
+        "openAiApi": {
+          "id": "hi9jgbWx4TTKkRVO",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n  \"type\": \"object\",\n  \"required\": [\"type\", \"batch_id\", \"categories\", \"next_step\"],\n  \"properties\": {\n    \"type\": { \"type\": \"string\" },\n    \"batch_id\": { \"type\": \"string\" },\n    \"next_step\": { \"type\": \"string\" },\n    \"categories\": {\n      \"type\": \"array\",\n      \"minItems\": 4,\n      \"maxItems\": 4,\n      \"items\": {\n        \"type\": \"object\",\n        \"required\": [\"category\", \"recommended_topic\", \"runner_up_topics\"],\n        \"properties\": {\n          \"category\": { \"type\": \"string\" },\n          \"recommended_topic\": {\n            \"type\": \"object\",\n            \"required\": [\"headline\", \"summary\", \"primary_sources\", \"rationale\"],\n            \"properties\": {\n              \"headline\": { \"type\": \"string\" },\n              \"summary\": { \"type\": \"string\" },\n              \"primary_sources\": {\n                \"type\": \"array\",\n                \"items\": { \"type\": \"string\" },\n                \"minItems\": 1\n              },\n              \"rationale\": { \"type\": \"string\" }\n            }\n          },\n          \"runner_up_topics\": {\n            \"type\": \"array\",\n            \"minItems\": 4,\n            \"maxItems\": 4,\n            \"items\": {\n              \"type\": \"object\",\n              \"required\": [\"headline\", \"summary\", \"primary_sources\"],\n              \"properties\": {\n                \"headline\": { \"type\": \"string\" },\n                \"summary\": { \"type\": \"string\" },\n                \"primary_sources\": {\n                  \"type\": \"array\",\n                  \"items\": { \"type\": \"string\" },\n                  \"minItems\": 1\n                }\n              }\n            }\n          }\n        }\n      }\n    }\n  }\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        640,
+        -192
+      ],
+      "id": "8f81668f-40fe-434f-b92d-3bcd2d41dc16",
+      "name": "Structured Output Parser",
+      "alwaysOutputData": true,
+      "disabled": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "options": {
+          "responseMode": "responseNodes"
+        },
+        "path": "386beb39-d280-4ed4-872a-2171201b2fb9"
+      },
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        -1328,
+        -352
+      ],
+      "id": "7ce0dada-397e-4c67-8992-3e00c5e51061",
+      "name": "Topic Picker",
+      "webhookId": "386beb39-d280-4ed4-872a-2171201b2fb9"
+    },
+    {
+      "parameters": {
+        "jsCode": "const userText =\n  ($json.chatInput || $json.message || $json.text || \"\").trim();\n\n// capture all possible identifiers (varies by n8n versions)\nconst ids = {\n  sessionId: $json.sessionId,\n  chatId: $json.chatId,\n  conversationId: $json.conversationId,\n  threadId: $json.threadId,\n};\n\n// pick the most stable one available (priority order)\nconst sessionId =\n  $json.conversationId ||\n  $json.chatId ||\n  $json.threadId ||\n  $json.sessionId ||\n  \"default-session\";\n\nconst globalData = $getWorkflowStaticData('global');\nif (!globalData.sessions) globalData.sessions = {};\nif (!globalData.sessions[sessionId]) globalData.sessions[sessionId] = { stage: \"need_category\" };\n\nreturn [{\n  sessionId,\n  userText,\n  state: globalData.sessions[sessionId],\n  ids // debug info\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1088,
+        -352
+      ],
+      "id": "e6abfe07-20f9-4939-b50d-87adbd28d7a5",
+      "name": "Get session state"
+    },
+    {
+      "parameters": {
+        "jsCode": "const userText = ($json.userText || \"\").trim();\nconst sessionId = $json.sessionId;\nconst state = $json.state || { stage: \"need_category\" };\n\nconst norm = userText.toLowerCase();\n\nlet action = \"unknown\";\n\n// Restart always works\nif (/^\\s*restart\\s*$/i.test(userText)) {\n  action = \"restart\";\n  state.stage = \"need_category\";\n  return [{ sessionId, userText, action, state }];\n}\n\n// 1️⃣ If waiting for category\nif (state.stage === \"need_category\") {\n  if (norm.includes(\"business\")) {\n    state.category = \"Business & Finance\";\n    state.stage = \"need_topics\";\n    action = \"got_category\";\n  } else if (norm.includes(\"entertainment\") || norm.includes(\"arts\")) {\n    state.category = \"Entertainment & Arts\";\n    state.stage = \"need_topics\";\n    action = \"got_category\";\n  } else if (norm.includes(\"environment\") || norm.includes(\"nature\")) {\n    state.category = \"Environment & Nature\";\n    state.stage = \"need_topics\";\n    action = \"got_category\";\n  } else if (norm.includes(\"science\") || norm.includes(\"tech\")) {\n    state.category = \"Science & Technology\";\n    state.stage = \"need_topics\";\n    action = \"got_category\";\n  } else {\n    action = \"ask_category\";\n  }\n}\n\n// 2️⃣ If we already generated topics and are waiting for confirm\nelse if (state.stage === \"await_confirm\") {\n  const match = userText.match(/^\\s*(confirm|pick|choose)\\s*([1-5])\\s*$/i);\n\n  if (match) {\n    state.choice = parseInt(match[2], 10);\n    action = \"confirm_topic\";\n  } else {\n    action = \"ask_confirm\";\n  }\n}\n\n// 3️⃣ If topic already confirmed\nelse if (state.stage === \"topic_confirmed\") {\n  action = \"already_confirmed\";\n}\n\n// Fallback\nelse {\n  action = \"ask_category\";\n  state.stage = \"need_category\";\n}\n\nreturn [{ sessionId, userText, action, state }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -768,
+        -336
+      ],
+      "id": "41c7c9ec-32ea-4b78-a0a9-84cf73bd6a09",
+      "name": "Stage router"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "97222884-8353-4181-a22c-07339e4d3dc2",
+                    "leftValue": "={{$json.action}}",
+                    "rightValue": "ask_category",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "9f1dd7c9-2604-46f1-a726-d4310366a077",
+                    "leftValue": "={{$json.action}}",
+                    "rightValue": "got_category",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "7a8e874a-f2e6-47e5-8000-2bb6e9795904",
+                    "leftValue": "={{$json.action}}",
+                    "rightValue": "ask_confirm",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "bbe8ce1a-d7a1-4699-bf52-8c045b134622",
+                    "leftValue": "={{$json.action}}",
+                    "rightValue": "confirm_topic",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "ed4d51ba-8e80-492e-a37d-fe9d5247fbb4",
+                    "leftValue": "={{$json.action}}",
+                    "rightValue": "restart",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        -368,
+        -400
+      ],
+      "id": "20dc4fcf-de27-44cc-bd39-5e61ec72c79c",
+      "name": "Switch"
+    },
+    {
+      "parameters": {
+        "message": "Pick a category:\n• Business & Finance\n• Entertainment & Arts\n• Environment & Nature\n• Science & Technology\n\nReply with the category name.\nType RESTART anytime.",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chat",
+      "typeVersion": 1,
+      "position": [
+        144,
+        -576
+      ],
+      "id": "b88ce59a-fbb8-44fc-862a-c4d0813a6829",
+      "name": "Respond to Chat"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 1) Pull the raw text from the AI Agent wrapper\nconst rawText =\n  $json?.response?.generations?.[0]?.[0]?.text\n  ?? $json?.output\n  ?? null;\n\nif (!rawText || typeof rawText !== \"string\") {\n  return [{\n    error: \"Could not find AI text output to parse\",\n    debug: $json\n  }];\n}\n\n// 2) Parse the JSON text\nlet parsed;\ntry {\n  parsed = JSON.parse(rawText);\n} catch (e) {\n  return [{\n    error: \"AI text was not valid JSON\",\n    debug_rawText: rawText.slice(0, 1000)\n  }];\n}\n\n// 3) Determine which category the user chose (from Stage router state)\nconst sessionId = $node[\"Get session state\"].json.sessionId;\nconst chosenCategory = $node[\"Stage router\"].json.state?.category;\n\n// 4) Your AI returned a 4-category batch. Extract the matching category block.\nlet categoryBlock = null;\n\nif (parsed.type === \"daily_topic_research\" && Array.isArray(parsed.categories)) {\n  categoryBlock = parsed.categories.find(c => c.category === chosenCategory);\n} else {\n  // fallback: if it ever returns single-category format\n  categoryBlock = parsed;\n}\n\nif (!categoryBlock) {\n  return [{\n    error: \"Could not find chosen category in AI output\",\n    chosenCategory,\n    debug_parsedKeys: Object.keys(parsed)\n  }];\n}\n\n// 5) Save topics to workflow static data\nconst globalData = $getWorkflowStaticData('global');\nif (!globalData.sessions) globalData.sessions = {};\nif (!globalData.sessions[sessionId]) globalData.sessions[sessionId] = { stage: \"need_category\" };\n\nglobalData.sessions[sessionId].stage = \"await_confirm\";\nglobalData.sessions[sessionId].category = chosenCategory;\n\n// Normalize field names to what your chat response expects\nconst recommended = categoryBlock.recommended_topic ?? categoryBlock.recommended;\nconst runnerUps = categoryBlock.runner_up_topics ?? categoryBlock.runner_ups;\n\nglobalData.sessions[sessionId].topics = {\n  recommended,\n  runner_ups: runnerUps\n};\n\n// 6) Output clean data for Respond to Chat\nreturn [{\n  sessionId,\n  category: chosenCategory,\n  recommended,\n  runner_ups: runnerUps\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        864,
+        -496
+      ],
+      "id": "ea82023f-8a43-41d2-b5e1-8a8dfa2e43cd",
+      "name": "Save topics"
+    },
+    {
+      "parameters": {
+        "message": "={{`Category: ${$json.category}\n\nRecommended (1):\n${$json.recommended.headline}\n${$json.recommended.summary}\nWhy #1: ${$json.recommended.rationale || $json.recommended.selection_rationale}\nSources: ${($json.recommended.primary_sources || $json.recommended.sources_considered || []).join(\", \")}\n\nRunner-ups:\n2) ${$json.runner_ups[0].headline} — ${$json.runner_ups[0].summary}\n3) ${$json.runner_ups[1].headline} — ${$json.runner_ups[1].summary}\n4) ${$json.runner_ups[2].headline} — ${$json.runner_ups[2].summary}\n5) ${$json.runner_ups[3].headline} — ${$json.runner_ups[3].summary}\n\nReply with: CONFIRM 1 (or 2–5)\nType RESTART to pick a different category.`}}",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chat",
+      "typeVersion": 1,
+      "position": [
+        1328,
+        -496
+      ],
+      "id": "e3ca9667-8e54-4b27-9f02-00012e351f05",
+      "name": "Respond to Chat1"
+    },
+    {
+      "parameters": {
+        "jsCode": "const sessionId = $json.sessionId;\nconst choice = $json.state.choice; // from Stage router parsing \"CONFIRM 1-5\"\n\nconst globalData = $getWorkflowStaticData('global');\nconst session = globalData.sessions?.[sessionId];\n\nif (!session || !session.topics) {\n  return [{\n    error: \"No topic suggestions found for this session. Type RESTART and choose a category again.\"\n  }];\n}\n\nconst recommended = session.topics.recommended;\nconst runnerUps = session.topics.runner_ups;\n\nlet selected;\nif (choice === 1) {\n  selected = recommended;\n} else if (choice >= 2 && choice <= 5) {\n  selected = runnerUps[choice - 2];\n} else {\n  return [{ error: \"Invalid choice. Reply CONFIRM 1 (or 2–5).\" }];\n}\n\n// Persist selection\nsession.stage = \"topic_confirmed\";\nsession.selected = { choice, ...selected };\n\nreturn [{\n  sessionId,\n  category: session.category,\n  selected: session.selected\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        32,
+        -320
+      ],
+      "id": "be9f1675-7189-4a17-b35c-adbacac59294",
+      "name": "Confirm selection"
+    },
+    {
+      "parameters": {
+        "message": "=={{`Confirmed ✅ (Option ${$json.selected.choice})\n\nCategory: ${$json.category}\n\nTopic:\n${$json.selected.headline}\n\nSummary:\n${$json.selected.summary}\n\nNext step:\nReply DRAFT to generate the full article, or RESTART to pick another topic.`}}",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chat",
+      "typeVersion": 1,
+      "position": [
+        240,
+        -320
+      ],
+      "id": "f46b8967-936d-4091-8875-b15f0132ee28",
+      "name": "Respond to Chat2"
+    }
+  ],
+  "connections": {
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Save topics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Topic Picker": {
+      "main": [
+        [
+          {
+            "node": "Get session state",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Stage router": {
+      "main": [
+        [
+          {
+            "node": "Switch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get session state": {
+      "main": [
+        [
+          {
+            "node": "Stage router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch": {
+      "main": [
+        [
+          {
+            "node": "Respond to Chat",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Confirm selection",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Save topics": {
+      "main": [
+        [
+          {
+            "node": "Respond to Chat1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Confirm selection": {
+      "main": [
+        [
+          {
+            "node": "Respond to Chat2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}

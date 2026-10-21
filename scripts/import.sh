@@ -10,6 +10,11 @@ cd "$(dirname "$0")/.."
 api() { curl -fsS -H "X-N8N-API-KEY: $N8N_API_KEY" -H "Content-Type: application/json" "$@"; }
 
 for f in "$@"; do
+  # Pushing a redacted file would overwrite the live secret in n8n with the placeholder
+  if grep -q 'REDACTED_' "$f"; then
+    echo "skipped  $f — contains REDACTED_ placeholders; move the secret into an n8n credential first" >&2
+    continue
+  fi
   id=$(jq -r '.id // empty' "$f")
   # Public API only accepts these fields on create/update
   body=$(jq '{name, nodes, connections, settings: (.settings // {}), staticData}' "$f")

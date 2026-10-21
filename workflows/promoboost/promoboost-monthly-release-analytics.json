@@ -1,0 +1,341 @@
+{
+  "id": "KkagNPRMjfYxajrf",
+  "name": "PromoBoost — Monthly Release Analytics",
+  "active": false,
+  "tags": [],
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "months",
+              "triggerAtDayOfMonth": 2,
+              "triggerAtHour": 7
+            }
+          ]
+        }
+      },
+      "id": "47271e34-8397-4a1d-8a59-58a3c242f23d",
+      "name": "Monthly (2nd, 07:00)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        704
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "p1",
+              "name": "properties",
+              "value": "=[{\"site\":\"promoboost.co.uk\",\"propertyId\":\"494858048\"},{\"site\":\"promomag.co.uk\",\"propertyId\":\"494855204\"},{\"site\":\"choiceformusic.co.uk\",\"propertyId\":\"494837581\"}]",
+              "type": "array"
+            },
+            {
+              "id": "p2",
+              "name": "periodStart",
+              "value": "={{ $now.minus({ months: 1 }).startOf('month').toFormat('yyyy-MM-dd') }}",
+              "type": "string"
+            },
+            {
+              "id": "p3",
+              "name": "periodEnd",
+              "value": "={{ $now.minus({ months: 1 }).endOf('month').toFormat('yyyy-MM-dd') }}",
+              "type": "string"
+            },
+            {
+              "id": "p4",
+              "name": "period",
+              "value": "={{ $now.minus({ months: 1 }).toFormat('yyyy-MM') }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "2b9a2052-5397-4b80-b8ea-43637ebf32f3",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        224,
+        704
+      ]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "properties",
+        "include": "allOtherFields",
+        "options": {}
+      },
+      "id": "051b469b-b0a1-4edf-9e0c-08a406507403",
+      "name": "One Item Per Property",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        448,
+        704
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://analyticsdata.googleapis.com/v1beta/properties/{{ $json.propertyId }}:runReport",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleAnalyticsOAuth2",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ dateRanges: [{ startDate: $json.periodStart, endDate: $json.periodEnd }], dimensions: [{ name: 'pagePath' }, { name: 'hostName' }], metrics: [{ name: 'screenPageViews' }, { name: 'totalUsers' }, { name: 'userEngagementDuration' }], limit: 1000, keepEmptyRows: false }) }}",
+        "options": {
+          "response": {
+            "response": {}
+          }
+        }
+      },
+      "id": "746caf68-c09d-4710-8604-3631fe27991f",
+      "name": "GA4 runReport",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        672,
+        704
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "// Flatten GA4 runReport rows into one item per URL.\nconst out = [];\n\nfor (const item of $input.all()) {\n  const res = item.json;\n  const src = res.__meta || {};\n  const rows = res.rows || [];\n\n  for (const r of rows) {\n    const d = (r.dimensionValues || []).map(v => v.value);\n    const m = (r.metricValues || []).map(v => v.value);\n    const pagePath = d[0] || '';\n    const host = d[1] || '';\n    if (!host) continue;\n\n    out.push({\n      json: {\n        url: 'https://' + host + pagePath,\n        pagePath,\n        host,\n        pageviews: Number(m[0] || 0),\n        users: Number(m[1] || 0),\n        engagement_seconds: Math.round(Number(m[2] || 0))\n      }\n    });\n  }\n}\n\nif (!out.length) {\n  return [{ json: { url: null, note: 'GA4 returned no rows for this period' } }];\n}\n\nreturn out;"
+      },
+      "id": "f75c4082-f8e9-4cf3-ab3f-71030a77ad90",
+      "name": "Flatten GA4 Rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        704
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "PUT_YOUR_SHEET_ID_HERE",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "releases",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "70539359-223b-4580-a1d5-f1fea37b9dc1",
+      "name": "Read releases Tab",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        880,
+        928
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Join GA4 URL metrics onto release_id using the releases tab.\n// A release can live on up to 3 URLs; metrics are summed per release.\n\nconst norm = (u) => {\n  if (!u) return '';\n  return String(u).trim().toLowerCase().replace(/[?#].*$/, '').replace(/\\/+$/, '');\n};\n\nconst releases = $('Read releases Tab').all().map(i => i.json);\n\n// Build lookup: normalised URL -> release meta\nconst lookup = {};\nfor (const rel of releases) {\n  for (const col of ['url_newsroom', 'url_promomag', 'url_choiceformusic']) {\n    const key = norm(rel[col]);\n    if (key) lookup[key] = rel;\n  }\n}\n\nconst period = $('Config').first().json.period;\nconst agg = {};\n\nfor (const item of $input.all()) {\n  const g = item.json;\n  if (!g.url) continue;\n  const rel = lookup[norm(g.url)];\n  if (!rel) continue; // page isn't a tracked release (home, category, etc.)\n\n  const id = rel.release_id;\n  if (!agg[id]) {\n    agg[id] = {\n      release_id: id,\n      period,\n      title: rel.title || '',\n      pageviews: 0,\n      users: 0,\n      engagement_seconds: 0,\n      sites_counted: [],\n      pulled_at: new Date().toISOString()\n    };\n  }\n  agg[id].pageviews += g.pageviews;\n  agg[id].users += g.users;\n  agg[id].engagement_seconds += g.engagement_seconds;\n  if (!agg[id].sites_counted.includes(g.host)) agg[id].sites_counted.push(g.host);\n}\n\nconst rows = Object.values(agg).map(r => ({\n  json: {\n    ...r,\n    sites_counted: r.sites_counted.join(', '),\n    avg_engagement_seconds: r.users ? Math.round(r.engagement_seconds / r.users) : 0\n  }\n}));\n\nif (!rows.length) {\n  return [{ json: { release_id: 'NONE', period, note: 'No tracked release URLs matched GA4 data this period' } }];\n}\n\nreturn rows;"
+      },
+      "id": "6f3748d8-85ae-45fd-b012-60c4f1fa5d27",
+      "name": "Match URLs to release_id",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1152,
+        704
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "PUT_YOUR_SHEET_ID_HERE",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "metrics",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "matchingColumns": [],
+          "value": {}
+        },
+        "options": {}
+      },
+      "id": "9487b8ac-a3cb-4f43-98b9-7b216db69385",
+      "name": "Append to metrics Tab",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1392,
+        704
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all().map(i => i.json).filter(r => r.release_id && r.release_id !== 'NONE');\nconst period = $('Config').first().json.period;\n\nif (!rows.length) {\n  return [{ json: { text: `PromoBoost analytics ${period}: no tracked releases matched. Check the releases tab URLs.` } }];\n}\n\nrows.sort((a, b) => b.pageviews - a.pageviews);\n\nconst totalViews = rows.reduce((s, r) => s + r.pageviews, 0);\nconst totalUsers = rows.reduce((s, r) => s + r.users, 0);\n\nconst top = rows.slice(0, 5)\n  .map((r, i) => `${i + 1}. ${r.title || r.release_id} — ${r.pageviews} views`)\n  .join('\\n');\n\nconst text = [\n  `PromoBoost — ${period}`,\n  `${rows.length} releases tracked`,\n  `${totalViews} pageviews / ${totalUsers} users`,\n  '',\n  'Top performers:',\n  top\n].join('\\n');\n\nreturn [{ json: { text } }];"
+      },
+      "id": "074acac4-0eb4-4ab0-9458-cdf9663af36d",
+      "name": "Build Digest",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1632,
+        704
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "PUT_YOUR_TELEGRAM_CHAT_ID",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "58015322-d5f3-4af3-a9ca-8658089bdbdb",
+      "name": "Telegram Digest",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1840,
+        704
+      ],
+      "webhookId": "80a9ec37-63ce-477d-80bf-150b5a0d8358"
+    },
+    {
+      "parameters": {
+        "content": "## Setup checklist\n\n1. **Credential**: create a *Google Analytics OAuth2* credential in n8n with scope `analytics.readonly`. The HTTP node reuses it.\n2. **Sheet ID**: replace `PUT_YOUR_SHEET_ID_HERE` in both Google Sheets nodes.\n3. **Telegram**: replace `PUT_YOUR_TELEGRAM_CHAT_ID`.\n4. **releases tab** must have these exact column headers:\n   `release_id, title, published_at, url_newsroom, url_promomag, url_choiceformusic, wayback_url`\n5. **metrics tab** headers:\n   `release_id, period, title, pageviews, users, engagement_seconds, sites_counted, avg_engagement_seconds, pulled_at`\n6. Format URL and date columns as **plain text** before first run.\n\n### Why it runs on the 2nd\nGA4 data is not final for 24–48h. Running on the 1st gives you undercounted numbers you then send to a client.\n\n### Adding outbound clicks later\n`link_url` is an event *parameter*, not a dimension. To report clicks to an artist's Spotify you must first register it as a custom dimension in GA4 Admin → Custom definitions. Until then, add a second runReport with `dimensionFilter` on `eventName = click` for a total-clicks count without destination breakdown.\n\n### Append-only by design\nThe metrics tab is never updated, only appended. That sidesteps Sheets race conditions and gives you month-on-month trend for free.",
+        "height": 620,
+        "width": 460
+      },
+      "id": "a0176b44-8f43-49e1-b7c0-44675b0fda49",
+      "name": "README",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Monthly (2nd, 07:00)": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "One Item Per Property",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "One Item Per Property": {
+      "main": [
+        [
+          {
+            "node": "GA4 runReport",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GA4 runReport": {
+      "main": [
+        [
+          {
+            "node": "Flatten GA4 Rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Flatten GA4 Rows": {
+      "main": [
+        [
+          {
+            "node": "Read releases Tab",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read releases Tab": {
+      "main": [
+        [
+          {
+            "node": "Match URLs to release_id",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Match URLs to release_id": {
+      "main": [
+        [
+          {
+            "node": "Append to metrics Tab",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append to metrics Tab": {
+      "main": [
+        [
+          {
+            "node": "Build Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Digest": {
+      "main": [
+        [
+          {
+            "node": "Telegram Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "meta": {}
+}

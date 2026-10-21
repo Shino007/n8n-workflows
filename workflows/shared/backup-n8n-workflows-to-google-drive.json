@@ -1,0 +1,308 @@
+{
+  "id": "ccdea6UFrC5d1nqB",
+  "name": "Backup n8n Workflows to Google Drive",
+  "active": true,
+  "tags": [],
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## n8n workflow backup -> Google Drive\n\n**One-time setup**\n\n1. *Get All Workflows* needs an **n8n API** credential.\n   Create the key in n8n under Settings -> n8n API, then point the\n   credential's base URL at this instance (e.g. `https://n8n.example.com/api/v1`).\n2. Both Google Drive nodes need a **Google Drive OAuth2** credential.\n3. Open **Backup Settings** and replace `YOUR_GOOGLE_DRIVE_FOLDER_ID`\n   with the ID of the Drive folder that should hold the backups.\n   It is the last path segment of the folder URL:\n   `https://drive.google.com/drive/folders/<THIS_PART>`\n4. If that folder lives on a **Shared Drive**, change the `Drive`\n   field on *both* Drive nodes from `My Drive` to that shared drive.\n\n**What it does**\n\nEvery run creates a dated subfolder (`n8n-backup-YYYY-MM-DD`) and drops one\n`.json` file per workflow into it - active and inactive alike. Each file is\nthe raw workflow definition, so it can be re-imported straight into n8n.\n\n*Backup Summary* ends the run with the folder link and a file count. If any\nupload fails the others still complete, and *Fail On Upload Errors* then\nmarks the execution failed and names the workflows that did not make it.\n\nHit *Run Backup Now* to test, or leave the daily schedule to do it at 03:00.\n",
+        "height": 836,
+        "width": 420,
+        "color": 4
+      },
+      "id": "587a5044-0102-4b06-b924-c3e290a20379",
+      "name": "Setup Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "6300127f-c78a-48a0-a0e0-b4c2ef073167",
+      "name": "Run Backup Now",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        480,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 3
+            }
+          ]
+        }
+      },
+      "id": "5b15886a-ac59-4ce1-bd09-b7e97c5857a0",
+      "name": "Every Day at 03:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        480,
+        288
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "cfg-parent-folder",
+              "name": "parentFolderId",
+              "value": "YOUR_GOOGLE_DRIVE_FOLDER_ID",
+              "type": "string"
+            },
+            {
+              "id": "cfg-backup-label",
+              "name": "backupLabel",
+              "value": "={{ $now.toFormat('yyyy-MM-dd') }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "06dbe199-30d4-468f-ab9f-6a379863f4f4",
+      "name": "Backup Settings",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        752,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "folder",
+        "name": "=n8n-backup-{{ $json.backupLabel }}",
+        "driveId": {
+          "__rl": true,
+          "value": "My Drive",
+          "mode": "list",
+          "cachedResultName": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "1Dma3Wdf3XXjYZbxpBQ_iXgZZuctELTsK",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "id": "b6a0a78f-a7c1-423b-ba6d-0a20e2d31319",
+      "name": "Create Dated Folder",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        992,
+        192
+      ],
+      "executeOnce": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "6bt7B4EhwPLzjHfh",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "filters": {},
+        "requestOptions": {}
+      },
+      "id": "b0bc395f-394c-4277-804c-8a6b05f774f2",
+      "name": "Get All Workflows",
+      "type": "n8n-nodes-base.n8n",
+      "typeVersion": 1,
+      "position": [
+        1232,
+        192
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "n8nApi": {
+          "id": "DPkDE7NxVORlJUBh",
+          "name": "n8n account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Turn every workflow returned by the n8n API into a downloadable .json file.\n// The file contents are the untouched workflow definition, so anything written\n// here can be re-imported into n8n as-is.\n\n// Read the date from Backup Settings instead of recomputing it here. The folder\n// name is built from that same value, so a run that straddles midnight - or an\n// instance whose timezone differs from the container's - can never stamp a file\n// with a date that disagrees with the folder holding it.\nconst backupDate = $('Backup Settings').first().json.backupLabel;\n\nconst files = [];\n\nfor (const item of $input.all()) {\n  const workflow = item.json;\n\n  // Google Drive tolerates most characters, but these break sync clients\n  // and anything that later mirrors the folder to a local disk.\n  const safeName = String(workflow.name || 'untitled')\n    .replace(/[\\\\/:*?\"<>|]/g, '-')\n    .replace(/\\s+/g, ' ')\n    .trim()\n    .slice(0, 90)\n    .trim() || 'untitled';\n\n  const fileName = `${safeName} [${workflow.id}].json`;\n  const contents = JSON.stringify(workflow, null, 2);\n\n  files.push({\n    json: {\n      fileName,\n      workflowId: workflow.id,\n      workflowName: workflow.name,\n      active: workflow.active === true,\n      updatedAt: workflow.updatedAt,\n      backupDate,\n      sizeBytes: Buffer.byteLength(contents, 'utf8'),\n    },\n    binary: {\n      data: {\n        data: Buffer.from(contents, 'utf8').toString('base64'),\n        mimeType: 'application/json',\n        fileName,\n        fileExtension: 'json',\n      },\n    },\n  });\n}\n\nreturn files;\n"
+      },
+      "id": "4dde6f97-9653-4c3c-a332-955a4d047c98",
+      "name": "Build Backup Files",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1472,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "name": "={{ $json.fileName }}",
+        "driveId": {
+          "__rl": true,
+          "value": "My Drive",
+          "mode": "list",
+          "cachedResultName": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "={{ $('Create Dated Folder').first().json.id }}",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "id": "a1372ddf-2d4e-461b-b533-01de91f20a7a",
+      "name": "Upload to Google Drive",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        1712,
+        192
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "6bt7B4EhwPLzjHfh",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Close out the run with something worth reading in the executions list.\n\nconst uploaded = $input.all();\nconst prepared = $('Build Backup Files').all();\nconst folder = $('Create Dated Folder').first().json;\nconst backupDate = $('Backup Settings').first().json.backupLabel;\n\nconst bytesPrepared = prepared.reduce(\n  (total, item) => total + (item.json.sizeBytes || 0),\n  0,\n);\n\nreturn [\n  {\n    json: {\n      backupDate,\n      folderName: folder.name || `n8n-backup-${backupDate}`,\n      folderId: folder.id,\n      folderUrl: `https://drive.google.com/drive/folders/${folder.id}`,\n      workflowsFound: prepared.length,\n      filesUploaded: uploaded.length,\n      uploadsFailed: prepared.length - uploaded.length,\n      bytesPrepared,\n    },\n  },\n];\n"
+      },
+      "id": "df3857eb-f774-44a8-9ad7-ee65a894d7f7",
+      "name": "Backup Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1952,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Reached only by the error output of the upload node, so every workflow that\n// COULD be uploaded already has been - a single bad file no longer costs us the\n// rest of the backup. Throwing here is deliberate: it keeps the execution red\n// in the executions list, so a partial backup is never mistaken for a clean one.\n\nconst failures = $input.all().map((item) => {\n  const error = item.json.error;\n  return {\n    workflow: item.json.workflowName || item.json.fileName || 'unknown workflow',\n    reason: (error && error.message) || error || 'unknown error',\n  };\n});\n\nif (failures.length === 0) {\n  return [];\n}\n\nconst detail = failures\n  .map((failure) => `- ${failure.workflow}: ${failure.reason}`)\n  .join('\\n');\n\nthrow new Error(\n  `${failures.length} workflow file(s) failed to upload:\\n${detail}`,\n);\n"
+      },
+      "id": "5c64e003-16ae-48a0-a6bb-21ced03a16ab",
+      "name": "Fail On Upload Errors",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1952,
+        304
+      ]
+    }
+  ],
+  "connections": {
+    "Run Backup Now": {
+      "main": [
+        [
+          {
+            "node": "Backup Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Every Day at 03:00": {
+      "main": [
+        [
+          {
+            "node": "Backup Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Backup Settings": {
+      "main": [
+        [
+          {
+            "node": "Create Dated Folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Dated Folder": {
+      "main": [
+        [
+          {
+            "node": "Get All Workflows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get All Workflows": {
+      "main": [
+        [
+          {
+            "node": "Build Backup Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Backup Files": {
+      "main": [
+        [
+          {
+            "node": "Upload to Google Drive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload to Google Drive": {
+      "main": [
+        [
+          {
+            "node": "Backup Summary",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fail On Upload Errors",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}

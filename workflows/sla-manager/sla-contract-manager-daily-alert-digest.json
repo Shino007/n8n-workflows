@@ -1,0 +1,428 @@
+{
+  "id": "nMSBtq2rpNBWW7Ny",
+  "name": "SLA Contract Manager — Daily Alert Digest",
+  "active": false,
+  "tags": [],
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * *"
+            }
+          ]
+        }
+      },
+      "id": "node_schedule_trigger",
+      "name": "Daily 8AM Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "operation": "search",
+        "base": {
+          "__rl": true,
+          "value": "app65IDx6BQUgSYE7",
+          "mode": "list",
+          "cachedResultName": "SLA Contract Manager",
+          "cachedResultUrl": "https://airtable.com/app65IDx6BQUgSYE7"
+        },
+        "table": {
+          "__rl": true,
+          "value": "tbl4vHxtrktR3lflU",
+          "mode": "list",
+          "cachedResultName": "Contracts",
+          "cachedResultUrl": "https://airtable.com/app65IDx6BQUgSYE7/tbl4vHxtrktR3lflU"
+        },
+        "options": {}
+      },
+      "id": "node_get_contracts",
+      "name": "Airtable - Get All Contracts",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        448,
+        0
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "ZhnOAGISD8QGQAl2",
+          "name": "Airtable Personal Access Token account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Check expiry dates and categorize urgency\nconst now = new Date();\nconst results = [];\n\nfor (const item of $input.all()) {\n  const fields = item.json.fields || item.json;\n  const expiryRaw = fields['Expiry Date'] || fields['expiry_date'] || fields['End Date'] || fields['end_date'] || null;\n\n  if (!expiryRaw) continue; // skip contracts with no expiry date\n\n  const expiryDate = new Date(expiryRaw);\n  if (isNaN(expiryDate.getTime())) continue; // skip invalid dates\n\n  const diffMs = expiryDate.getTime() - now.getTime();\n  const daysRemaining = Math.ceil(diffMs / (1000 * 60 * 60 * 24));\n\n  let alertType = 'ok';\n  if (daysRemaining <= 0) {\n    alertType = 'expired';\n  } else if (daysRemaining <= 30) {\n    alertType = 'critical';\n  } else if (daysRemaining <= 60) {\n    alertType = 'warning';\n  } else if (daysRemaining <= 90) {\n    alertType = 'notice';\n  }\n\n  results.push({\n    json: {\n      id: item.json.id || fields.id || 'unknown',\n      contract_name: fields['Contract Name'] || fields['contract_name'] || fields['Name'] || fields['name'] || 'Unnamed',\n      vendor: fields['Vendor'] || fields['vendor'] || fields['Party'] || fields['party'] || 'Unknown',\n      expiry_date: expiryRaw,\n      days_remaining: daysRemaining,\n      alert_type: alertType,\n      risk_score: fields['Risk Score'] || fields['risk_score'] || null,\n      value: fields['Contract Value'] || fields['contract_value'] || fields['Value'] || null,\n      status: fields['Status'] || fields['status'] || 'Unknown'\n    }\n  });\n}\n\n// Sort by days_remaining ascending (most urgent first)\nresults.sort((a, b) => a.json.days_remaining - b.json.days_remaining);\n\nreturn results.length > 0 ? results : [{ json: { _empty: true, alert_type: 'ok', days_remaining: 999 } }];"
+      },
+      "id": "node_check_expiry",
+      "name": "Check Expiry Dates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition_expiring_soon",
+              "leftValue": "={{ $json.days_remaining }}",
+              "rightValue": 90,
+              "operator": {
+                "type": "number",
+                "operation": "lte"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node_filter_expiring",
+      "name": "Filter - Expiring Soon",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "search",
+        "base": {
+          "__rl": true,
+          "value": "app65IDx6BQUgSYE7",
+          "mode": "list",
+          "cachedResultName": "SLA Contract Manager",
+          "cachedResultUrl": "https://airtable.com/app65IDx6BQUgSYE7"
+        },
+        "table": {
+          "__rl": true,
+          "value": "tblYh2C1oT5CCKpl8",
+          "mode": "list",
+          "cachedResultName": "Concerns and Risks",
+          "cachedResultUrl": "https://airtable.com/app65IDx6BQUgSYE7/tblYh2C1oT5CCKpl8"
+        },
+        "options": {}
+      },
+      "id": "node_get_concerns",
+      "name": "Airtable - Get Open Concerns",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        448,
+        304
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "ZhnOAGISD8QGQAl2",
+          "name": "Airtable Personal Access Token account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build alert summary — combines expiring contracts + open high-risk concerns + SLA breaches\nconst allItems = $input.all();\n\n// Separate items by source — items from merge node carry different shapes\n// Filter - Expiring Soon items have alert_type and days_remaining\n// Airtable - Get Open Concerns items have fields with Risk Level\n// Check SLA Breaches items have breaches array\nlet expiringContracts = [];\nlet concerns = [];\nlet slaData = { breaches: [], credits: [], breach_count: 0, credit_count: 0 };\n\nfor (const item of allItems) {\n  const j = item.json;\n  if (j.breaches !== undefined) {\n    // SLA breach data\n    slaData = j;\n  } else if (j.alert_type && j.days_remaining !== undefined && !j._empty) {\n    // Expiring contract\n    expiringContracts.push(item);\n  } else if (j.fields || j['Risk Level'] || j['risk_level'] || j['Concern'] || j['concern']) {\n    // Concern record\n    concerns.push(item);\n  }\n}\n\nconst now = new Date().toISOString().split('T')[0];\n\n// Group expiring contracts by urgency\nconst expired = expiringContracts.filter(i => i.json.alert_type === 'expired');\nconst critical = expiringContracts.filter(i => i.json.alert_type === 'critical');\nconst warning = expiringContracts.filter(i => i.json.alert_type === 'warning');\nconst notice = expiringContracts.filter(i => i.json.alert_type === 'notice');\n\n// --- Plain text version ---\nlet plain = `SLA Contract Manager — Daily Alert Digest\\nGenerated: ${now}\\n`;\nplain += `${'='.repeat(50)}\\n\\n`;\n\nfunction formatContractLine(c) {\n  return `  - ${c.json.contract_name} (${c.json.vendor}) — expires ${c.json.expiry_date} (${c.json.days_remaining} days)${c.json.risk_score ? ' [Risk: ' + c.json.risk_score + ']' : ''}`;\n}\n\nplain += `SECTION 1: CONTRACTS EXPIRING SOON\\n`;\nplain += `${'-'.repeat(40)}\\n`;\n\nif (expired.length > 0) {\n  plain += `\\n🔴 EXPIRED (${expired.length}):\\n`;\n  expired.forEach(c => { plain += formatContractLine(c) + '\\n'; });\n}\nif (critical.length > 0) {\n  plain += `\\n🔴 CRITICAL — within 30 days (${critical.length}):\\n`;\n  critical.forEach(c => { plain += formatContractLine(c) + '\\n'; });\n}\nif (warning.length > 0) {\n  plain += `\\n🟡 WARNING — within 60 days (${warning.length}):\\n`;\n  warning.forEach(c => { plain += formatContractLine(c) + '\\n'; });\n}\nif (notice.length > 0) {\n  plain += `\\n🟢 NOTICE — within 90 days (${notice.length}):\\n`;\n  notice.forEach(c => { plain += formatContractLine(c) + '\\n'; });\n}\nif (expiringContracts.length === 0) {\n  plain += `\\n  No contracts expiring within 90 days.\\n`;\n}\n\nplain += `\\nSECTION 2: HIGH-RISK OPEN CONCERNS\\n`;\nplain += `${'-'.repeat(40)}\\n`;\nif (concerns.length > 0) {\n  concerns.forEach(c => {\n    const f = c.json.fields || c.json;\n    plain += `  - ${f['Concern'] || f['concern'] || f['Description'] || f['description'] || 'No description'}`;\n    if (f['Contract Name'] || f['contract_name']) plain += ` (Contract: ${f['Contract Name'] || f['contract_name']})`;\n    plain += '\\n';\n  });\n} else {\n  plain += `  No high-risk open concerns.\\n`;\n}\n\nplain += `\\nSECTION 3: SLA BREACHES\\n`;\nplain += `${'-'.repeat(40)}\\n`;\nif (slaData.breaches.length > 0) {\n  for (const b of slaData.breaches) {\n    plain += `  - ${b.contract_name} (${b.period}): actual ${b.actual_uptime}% vs target ${b.target_uptime}% (gap: ${b.gap}%)${b.credit_triggered ? ' [CREDIT TRIGGERED]' : ''}\\n`;\n  }\n} else {\n  plain += `  No SLA breaches detected.\\n`;\n}\n\nif (slaData.credits.length > 0) {\n  plain += `\\nSECTION 4: SERVICE CREDITS TRIGGERED\\n`;\n  plain += `${'-'.repeat(40)}\\n`;\n  for (const cr of slaData.credits) {\n    plain += `  - ${cr.contract_name} (${cr.period}): actual ${cr.actual_uptime}% vs target ${cr.target_uptime}%\\n`;\n  }\n}\n\nplain += `\\nSECTION 5: SUMMARY\\n`;\nplain += `${'-'.repeat(40)}\\n`;\nplain += `  Expired:  ${expired.length}\\n`;\nplain += `  Critical: ${critical.length}\\n`;\nplain += `  Warning:  ${warning.length}\\n`;\nplain += `  Notice:   ${notice.length}\\n`;\nplain += `  High-risk concerns: ${concerns.length}\\n`;\nplain += `  SLA breaches: ${slaData.breach_count}\\n`;\nplain += `  Service credits triggered: ${slaData.credit_count}\\n`;\nplain += `  Total alerts: ${expiringContracts.length + concerns.length + slaData.breach_count}\\n`;\n\n// --- HTML version ---\nfunction escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\n\nfunction contractRow(c) {\n  const color = c.json.alert_type === 'expired' ? '#dc2626' : c.json.alert_type === 'critical' ? '#dc2626' : c.json.alert_type === 'warning' ? '#d97706' : '#16a34a';\n  return `<tr>\n    <td style=\"padding:6px 12px;border-bottom:1px solid #e5e7eb;\">${escHtml(c.json.contract_name)}</td>\n    <td style=\"padding:6px 12px;border-bottom:1px solid #e5e7eb;\">${escHtml(c.json.vendor)}</td>\n    <td style=\"padding:6px 12px;border-bottom:1px solid #e5e7eb;\">${escHtml(c.json.expiry_date)}</td>\n    <td style=\"padding:6px 12px;border-bottom:1px solid #e5e7eb;font-weight:bold;color:${color};\">${c.json.days_remaining} days</td>\n    <td style=\"padding:6px 12px;border-bottom:1px solid #e5e7eb;\">${c.json.risk_score || '—'}</td>\n  </tr>`;\n}\n\nlet html = `<div style=\"font-family:Arial,Helvetica,sans-serif;max-width:700px;margin:0 auto;\">`;\nhtml += `<h1 style=\"color:#1e293b;border-bottom:3px solid #3b82f6;padding-bottom:8px;\">SLA Contract Manager</h1>`;\nhtml += `<p style=\"color:#64748b;\">Daily Alert Digest — ${now}</p>`;\n\n// Expiring contracts table\nhtml += `<h2 style=\"color:#1e293b;margin-top:24px;\">Contracts Expiring Soon</h2>`;\nif (expiringContracts.length > 0) {\n  html += `<table style=\"width:100%;border-collapse:collapse;font-size:14px;\">`;\n  html += `<thead><tr style=\"background:#f1f5f9;\">`;\n  html += `<th style=\"padding:8px 12px;text-align:left;\">Contract</th>`;\n  html += `<th style=\"padding:8px 12px;text-align:left;\">Vendor</th>`;\n  html += `<th style=\"padding:8px 12px;text-align:left;\">Expiry</th>`;\n  html += `<th style=\"padding:8px 12px;text-align:left;\">Remaining</th>`;\n  html += `<th style=\"padding:8px 12px;text-align:left;\">Risk</th>`;\n  html += `</tr></thead><tbody>`;\n  [...expired, ...critical, ...warning, ...notice].forEach(c => { html += contractRow(c); });\n  html += `</tbody></table>`;\n} else {\n  html += `<p style=\"color:#16a34a;\">No contracts expiring within 90 days.</p>`;\n}\n\n// High-risk concerns\nhtml += `<h2 style=\"color:#1e293b;margin-top:24px;\">High-Risk Open Concerns</h2>`;\nif (concerns.length > 0) {\n  html += `<ul style=\"font-size:14px;\">`;\n  concerns.forEach(c => {\n    const f = c.json.fields || c.json;\n    const desc = f['Concern'] || f['concern'] || f['Description'] || f['description'] || 'No description';\n    const contract = f['Contract Name'] || f['contract_name'] || '';\n    html += `<li style=\"margin-bottom:6px;\"><strong>${escHtml(desc)}</strong>${contract ? ' — ' + escHtml(contract) : ''}</li>`;\n  });\n  html += `</ul>`;\n} else {\n  html += `<p style=\"color:#16a34a;\">No high-risk open concerns.</p>`;\n}\n\n// SLA Breaches section\nhtml += `<h2 style=\"color:#1e293b;margin-top:24px;\">SLA Breaches</h2>`;\nif (slaData.breaches.length > 0) {\n  html += `<table style=\"width:100%;border-collapse:collapse;font-size:14px;\">`;\n  html += `<thead><tr style=\"background:#fef2f2;\">`;\n  html += `<th style=\"padding:8px 12px;text-align:left;color:#dc2626;\">Contract</th>`;\n  html += `<th style=\"padding:8px 12px;text-align:left;color:#dc2626;\">Period</th>`;\n  html += `<th style=\"padding:8px 12px;text-align:left;color:#dc2626;\">Actual</th>`;\n  html += `<th style=\"padding:8px 12px;text-align:left;color:#dc2626;\">Target</th>`;\n  html += `<th style=\"padding:8px 12px;text-align:left;color:#dc2626;\">Gap</th>`;\n  html += `<th style=\"padding:8px 12px;text-align:left;color:#dc2626;\">Credit?</th>`;\n  html += `</tr></thead><tbody>`;\n  for (const b of slaData.breaches) {\n    html += `<tr style=\"background:#fef2f2;\">`;\n    html += `<td style=\"padding:6px 12px;border-bottom:1px solid #fecaca;color:#dc2626;font-weight:bold;\">${escHtml(b.contract_name)}</td>`;\n    html += `<td style=\"padding:6px 12px;border-bottom:1px solid #fecaca;\">${escHtml(b.period)}</td>`;\n    html += `<td style=\"padding:6px 12px;border-bottom:1px solid #fecaca;color:#dc2626;font-weight:bold;\">${b.actual_uptime}%</td>`;\n    html += `<td style=\"padding:6px 12px;border-bottom:1px solid #fecaca;\">${b.target_uptime}%</td>`;\n    html += `<td style=\"padding:6px 12px;border-bottom:1px solid #fecaca;color:#dc2626;font-weight:bold;\">${b.gap}%</td>`;\n    html += `<td style=\"padding:6px 12px;border-bottom:1px solid #fecaca;\">${b.credit_triggered ? '⚠️ YES' : 'No'}</td>`;\n    html += `</tr>`;\n  }\n  html += `</tbody></table>`;\n} else {\n  html += `<p style=\"color:#16a34a;\">No SLA breaches detected.</p>`;\n}\n\n// Service Credits Triggered\nif (slaData.credits.length > 0) {\n  html += `<h2 style=\"color:#b91c1c;margin-top:24px;\">⚠️ Service Credits Triggered</h2>`;\n  html += `<ul style=\"font-size:14px;\">`;\n  for (const cr of slaData.credits) {\n    html += `<li style=\"margin-bottom:6px;color:#dc2626;\"><strong>${escHtml(cr.contract_name)}</strong> (${escHtml(cr.period)}): actual ${cr.actual_uptime}% vs target ${cr.target_uptime}%</li>`;\n  }\n  html += `</ul>`;\n}\n\n// Summary stats\nhtml += `<div style=\"margin-top:24px;padding:16px;background:#f8fafc;border-radius:8px;border:1px solid #e2e8f0;\">`;\nhtml += `<h3 style=\"margin-top:0;color:#1e293b;\">Summary</h3>`;\nhtml += `<table style=\"font-size:14px;\">`;\nhtml += `<tr><td style=\"padding:2px 16px 2px 0;color:#dc2626;font-weight:bold;\">Expired:</td><td>${expired.length}</td></tr>`;\nhtml += `<tr><td style=\"padding:2px 16px 2px 0;color:#dc2626;font-weight:bold;\">Critical (&lt;30d):</td><td>${critical.length}</td></tr>`;\nhtml += `<tr><td style=\"padding:2px 16px 2px 0;color:#d97706;font-weight:bold;\">Warning (&lt;60d):</td><td>${warning.length}</td></tr>`;\nhtml += `<tr><td style=\"padding:2px 16px 2px 0;color:#16a34a;\">Notice (&lt;90d):</td><td>${notice.length}</td></tr>`;\nhtml += `<tr><td style=\"padding:2px 16px 2px 0;\">High-risk concerns:</td><td>${concerns.length}</td></tr>`;\nhtml += `<tr><td style=\"padding:2px 16px 2px 0;color:#dc2626;\">SLA breaches:</td><td>${slaData.breach_count}</td></tr>`;\nhtml += `<tr><td style=\"padding:2px 16px 2px 0;color:#b91c1c;\">Service credits:</td><td>${slaData.credit_count}</td></tr>`;\nhtml += `<tr><td style=\"padding:2px 16px 2px 0;font-weight:bold;\">Total alerts:</td><td><strong>${expiringContracts.length + concerns.length + slaData.breach_count}</strong></td></tr>`;\nhtml += `</table></div>`;\n\nhtml += `<p style=\"margin-top:24px;font-size:12px;color:#94a3b8;\">Generated by Contract Pulse SLA Monitor</p>`;\nhtml += `</div>`;\n\nconst hasAlerts = expiringContracts.length > 0 || concerns.length > 0 || slaData.breach_count > 0;\n\nreturn [{\n  json: {\n    has_alerts: hasAlerts,\n    total_alerts: expiringContracts.length + concerns.length + slaData.breach_count,\n    expired_count: expired.length,\n    critical_count: critical.length,\n    warning_count: warning.length,\n    notice_count: notice.length,\n    concerns_count: concerns.length,\n    sla_breach_count: slaData.breach_count,\n    credit_count: slaData.credit_count,\n    plain_text: plain,\n    html_body: html,\n    generated_at: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "node_build_summary",
+      "name": "Build Alert Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1328,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "alerts@contractpulse.local",
+        "toEmail": "={{ $json.to_override || 'admin@contractpulse.local' }}",
+        "subject": "SLA Contract Manager — Daily Alert Digest",
+        "html": "={{ $json.html_body }}",
+        "options": {}
+      },
+      "id": "node_send_email",
+      "name": "Send Email Alert",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1552,
+        160
+      ],
+      "webhookId": "263cda37-4bfa-4559-84d1-86f2791b46f2",
+      "credentials": {
+        "smtp": {
+          "id": "REPLACE_SMTP_CREDENTIAL_ID",
+          "name": "SMTP Credentials"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Log the alert for audit trail\nconst summary = $input.item.json;\nconst logEntry = {\n  event: 'sla_alert_digest_sent',\n  timestamp: new Date().toISOString(),\n  total_alerts: summary.total_alerts || 0,\n  expired: summary.expired_count || 0,\n  critical: summary.critical_count || 0,\n  warning: summary.warning_count || 0,\n  notice: summary.notice_count || 0,\n  high_risk_concerns: summary.concerns_count || 0,\n  has_alerts: summary.has_alerts || false,\n  generated_at: summary.generated_at || new Date().toISOString()\n};\n\nconsole.log('SLA Alert Digest:', JSON.stringify(logEntry));\n\nreturn [{ json: logEntry }];"
+      },
+      "id": "node_log_alert",
+      "name": "Log Alert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        160
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "node_manual_trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "search",
+        "base": {
+          "__rl": true,
+          "value": "app65IDx6BQUgSYE7",
+          "mode": "list",
+          "cachedResultName": "SLA Contract Manager",
+          "cachedResultUrl": "https://airtable.com/app65IDx6BQUgSYE7"
+        },
+        "table": "Uptime Log",
+        "options": {}
+      },
+      "id": "node_get_uptime_log",
+      "name": "Airtable - Get Uptime Log",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        448,
+        608
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "ZhnOAGISD8QGQAl2",
+          "name": "Airtable Personal Access Token account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Check SLA breaches and credit-triggered items from Uptime Log\nconst records = $input.all();\nconst breaches = [];\nconst credits = [];\n\nfor (const item of records) {\n  const f = item.json.fields || item.json;\n\n  const breach = f['Breach'] === true || f['breach'] === true || f['Breach'] === 'true';\n  const creditTriggered = f['Credit Triggered'] === true || f['credit_triggered'] === true || f['Credit Triggered'] === 'true';\n  const actualUptime = parseFloat(f['Actual Uptime'] || f['actual_uptime'] || 0);\n  const targetUptime = parseFloat(f['Target Uptime'] || f['target_uptime'] || 0);\n  const contractName = f['Contract Name'] || f['contract_name'] || f['Name'] || f['name'] || 'Unknown';\n  const period = f['Period'] || f['period'] || f['Month'] || f['month'] || 'Unknown';\n  const gap = targetUptime - actualUptime;\n\n  if (breach || actualUptime < targetUptime) {\n    breaches.push({\n      contract_name: contractName,\n      period: period,\n      actual_uptime: actualUptime,\n      target_uptime: targetUptime,\n      gap: Math.round(gap * 1000) / 1000,\n      credit_triggered: creditTriggered\n    });\n  }\n\n  if (creditTriggered) {\n    credits.push({\n      contract_name: contractName,\n      period: period,\n      actual_uptime: actualUptime,\n      target_uptime: targetUptime\n    });\n  }\n}\n\n// Group breaches by contract\nconst grouped = {};\nfor (const b of breaches) {\n  if (!grouped[b.contract_name]) grouped[b.contract_name] = [];\n  grouped[b.contract_name].push(b);\n}\n\nreturn [{\n  json: {\n    breaches: breaches,\n    credits: credits,\n    grouped_breaches: grouped,\n    breach_count: breaches.length,\n    credit_count: credits.length\n  }\n}];"
+      },
+      "id": "node_check_sla_breaches",
+      "name": "Check SLA Breaches",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        608
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "node_merge_alerts",
+      "name": "Merge Alert Data",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        1104,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "YOUR_SLACK_WEBHOOK_URL",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.plain_text }) }}",
+        "options": {}
+      },
+      "id": "node_send_slack",
+      "name": "Send Slack Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1552,
+        400
+      ]
+    }
+  ],
+  "connections": {
+    "Daily 8AM Trigger": {
+      "main": [
+        [
+          {
+            "node": "Airtable - Get All Contracts",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Airtable - Get Open Concerns",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Airtable - Get Uptime Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Airtable - Get All Contracts",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Airtable - Get Open Concerns",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Airtable - Get Uptime Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Airtable - Get All Contracts": {
+      "main": [
+        [
+          {
+            "node": "Check Expiry Dates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Expiry Dates": {
+      "main": [
+        [
+          {
+            "node": "Filter - Expiring Soon",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter - Expiring Soon": {
+      "main": [
+        [
+          {
+            "node": "Merge Alert Data",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Airtable - Get Open Concerns": {
+      "main": [
+        [
+          {
+            "node": "Merge Alert Data",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Airtable - Get Uptime Log": {
+      "main": [
+        [
+          {
+            "node": "Check SLA Breaches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check SLA Breaches": {
+      "main": [
+        [
+          {
+            "node": "Merge Alert Data",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Merge Alert Data": {
+      "main": [
+        [
+          {
+            "node": "Build Alert Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Alert Summary": {
+      "main": [
+        [
+          {
+            "node": "Send Email Alert",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send Slack Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Email Alert": {
+      "main": [
+        [
+          {
+            "node": "Log Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "meta": {}
+}

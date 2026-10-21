@@ -1,0 +1,9 @@
+# Extend the default ruleset with project-specific false positives.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Identifiers that look like keys but are not secrets"
+# Airtable base IDs (appXXXXXXXXXXXXXX) identify a base; access needs a separate PAT
+regexTarget = "match"
+regexes = ['''app[A-Za-z0-9]{14}''']
