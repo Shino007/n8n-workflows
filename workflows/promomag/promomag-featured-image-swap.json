@@ -4,7 +4,8 @@
   "active": true,
   "tags": [],
   "settings": {
-    "executionOrder": "v1"
+    "executionOrder": "v1",
+    "errorWorkflow": "__SET_ME_ERROR_WORKFLOW_ID__"
   },
   "nodes": [
     {
@@ -30,7 +31,7 @@
         0
       ],
       "parameters": {
-        "jsCode": "const j = $input.first().json || {};\nconst chatId = j.chatId || 8271099427;\n\nconst raw = String(j.query || '').trim();\nconst cleaned = raw.replace(/[^a-zA-Z0-9 ]/g, ' ').replace(/\\s+/g, ' ').trim();\n\n// Pixabay ANDs its search terms, so a long phrase returns nothing and the run dead-ends\n// on an empty hits array. Three words is the ceiling that reliably returns results.\nconst words = cleaned.split(' ').filter(w => w.length > 1).slice(0, 3);\nconst query = words.join(' ');\n\nif (!query) {\n  return [{ json: { chatId, query: '', valid: false, reason: 'No search term given. Send: image <search term>' } }];\n}\n\nreturn [{ json: { chatId, query, valid: true, reason: '' } }];"
+        "jsCode": "const j = $input.first().json || {};\nconst chatId = j.chatId;\n// The caller always passes chatId. Without it there is nobody to show the preview to, so fail\n// loudly (the error workflow alerts) rather than guess a chat.\nif (!chatId) throw new Error('Image Swap called without chatId');\n\nconst raw = String(j.query || '').trim();\nconst cleaned = raw.replace(/[^a-zA-Z0-9 ]/g, ' ').replace(/\\s+/g, ' ').trim();\n\n// Pixabay ANDs its search terms, so a long phrase returns nothing and the run dead-ends\n// on an empty hits array. Three words is the ceiling that reliably returns results.\nconst words = cleaned.split(' ').filter(w => w.length > 1).slice(0, 3);\nconst query = words.join(' ');\n\nif (!query) {\n  return [{ json: { chatId, query: '', valid: false, reason: 'No search term given. Send: image <search term>' } }];\n}\n\nreturn [{ json: { chatId, query, valid: true, reason: '' } }];"
       }
     },
     {
@@ -70,12 +71,23 @@
       ],
       "parameters": {
         "method": "GET",
-        "url": "=https://pixabay.com/api/?key=REDACTED_API_KEY&q={{ encodeURIComponent($('Normalise Request').item.json.query) }}&image_type=photo&orientation=horizontal&min_width=1280&safesearch=true&per_page=10&order=popular",
+        "url": "=https://pixabay.com/api/?q={{ encodeURIComponent($('Normalise Request').item.json.query) }}&image_type=photo&orientation=horizontal&min_width=1280&safesearch=true&per_page=10&order=popular",
         "options": {
           "timeout": 15000
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth"
+      },
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "httpQueryAuth": {
+          "id": "__SET_ME_PIXABAY_CREDENTIAL_ID__",
+          "name": "Pixabay API"
         }
       },
-      "onError": "continueRegularOutput"
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
     },
     {
       "id": "17f214e7-1801-4b4f-93f4-0f0b7e90cddc",
