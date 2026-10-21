@@ -1,0 +1,1859 @@
+{
+  "id": "ihnNBwAYgQ37CEb5",
+  "name": "SLA Contract Manager v1",
+  "active": false,
+  "tags": [],
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ingest-contract",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "id": "node-webhook",
+      "name": "Webhook - Ingest Contract",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        400
+      ],
+      "webhookId": "ingest-contract"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: true, status: \"processing\" }) }}",
+        "responseCode": 202,
+        "options": {}
+      },
+      "id": "node-respond-202",
+      "name": "Respond 202 Accepted",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        220,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "rules": [
+            {
+              "outputKey": "pdf",
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "id": "condition-pdf",
+                    "leftValue": "={{ $binary.data.mimeType }}",
+                    "rightValue": "pdf",
+                    "operator": {
+                      "type": "string",
+                      "operation": "contains"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true
+            },
+            {
+              "outputKey": "word",
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "id": "condition-word-1",
+                    "leftValue": "={{ $binary.data.mimeType }}",
+                    "rightValue": "word",
+                    "operator": {
+                      "type": "string",
+                      "operation": "contains"
+                    }
+                  }
+                ],
+                "combinator": "or"
+              },
+              "renameOutput": true
+            },
+            {
+              "outputKey": "excel",
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "id": "condition-excel-1",
+                    "leftValue": "={{ $binary.data.mimeType }}",
+                    "rightValue": "sheet",
+                    "operator": {
+                      "type": "string",
+                      "operation": "contains"
+                    }
+                  }
+                ],
+                "combinator": "or"
+              },
+              "renameOutput": true
+            }
+          ],
+          "fallbackOutput": {
+            "outputKey": "plaintext"
+          }
+        },
+        "options": {}
+      },
+      "id": "node-file-router",
+      "name": "File Type Router",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        220,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "pdf",
+        "binaryPropertyName": "data",
+        "options": {}
+      },
+      "id": "node-pdf-extract",
+      "name": "PDF Text Extraction",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        440,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst results = [];\n\nfor (const item of items) {\n  const buffer = await this.helpers.getBinaryDataBuffer(item, 'data');\n\n  // DOCX is a ZIP file - find word/document.xml inside\n  const bufStr = buffer.toString('binary');\n  const marker = 'word/document.xml';\n  const idx = bufStr.indexOf(marker);\n\n  if (idx === -1) {\n    // Not a valid DOCX, try as plain text\n    results.push({ json: { extracted_text: buffer.toString('utf-8'), source_type: 'docx_fallback' } });\n    continue;\n  }\n\n  const { execSync } = require('child_process');\n  const fs = require('fs');\n  const os = require('os');\n  const path = require('path');\n\n  // Write buffer to temp file\n  const tmpFile = path.join(os.tmpdir(), `docx_${Date.now()}.docx`);\n  fs.writeFileSync(tmpFile, buffer);\n\n  try {\n    const xml = execSync(`unzip -p \"${tmpFile}\" word/document.xml 2>/dev/null`, { encoding: 'utf-8', maxBuffer: 50 * 1024 * 1024 });\n\n    const text = xml\n      .replace(/<w:br[^>]*\\/>/gi, '\\n')\n      .replace(/<w:p[^>]*>/gi, '\\n')\n      .replace(/<[^>]+>/g, '')\n      .replace(/&amp;/g, '&')\n      .replace(/&lt;/g, '<')\n      .replace(/&gt;/g, '>')\n      .replace(/&quot;/g, '\"')\n      .replace(/&apos;/g, \"'\")\n      .replace(/\\n{3,}/g, '\\n\\n')\n      .trim();\n\n    results.push({ json: { extracted_text: text, source_type: 'docx' } });\n  } catch (e) {\n    results.push({ json: { extracted_text: buffer.toString('utf-8'), source_type: 'docx_error', error: e.message } });\n  } finally {\n    try { fs.unlinkSync(tmpFile); } catch(e) {}\n  }\n}\n\nreturn results;"
+      },
+      "id": "node-word-extract",
+      "name": "Word Text Extraction",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "fromFile",
+        "options": {}
+      },
+      "id": "node-excel-read",
+      "name": "Excel Read Spreadsheet",
+      "type": "n8n-nodes-base.spreadsheetFile",
+      "typeVersion": 2,
+      "position": [
+        440,
+        600
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Convert spreadsheet rows to text string\nconst items = $input.all();\nlet text = '';\n\nif (items.length > 0) {\n  // Get headers from first item keys\n  const headers = Object.keys(items[0].json).filter(k => !k.startsWith('_'));\n  text += headers.join(' | ') + '\\n';\n  text += headers.map(() => '---').join(' | ') + '\\n';\n\n  for (const item of items) {\n    const row = headers.map(h => String(item.json[h] || '')).join(' | ');\n    text += row + '\\n';\n  }\n}\n\nreturn [{\n  json: {\n    text: text,\n    source_type: 'spreadsheet',\n    char_count: text.length,\n    row_count: items.length\n  }\n}];"
+      },
+      "id": "node-excel-to-text",
+      "name": "Excel Rows to Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        600
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Decode binary buffer to UTF-8 text\nconst buffer = await this.helpers.getBinaryDataBuffer(0, 'data');\nconst text = buffer.toString('utf-8');\n\nreturn [{\n  json: {\n    text: text,\n    source_type: 'plaintext',\n    char_count: text.length\n  }\n}];"
+      },
+      "id": "node-plaintext-extract",
+      "name": "Plain Text Fallback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        800
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "append",
+        "options": {}
+      },
+      "id": "node-merge-extraction",
+      "name": "Merge Extraction Paths",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        880,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.item;\nconst contractText = (item.json.text || '').substring(0, 15000);\n\n// Gather metadata from webhook body/headers\nconst orgId = item.json.org_id || $('Webhook - Ingest Contract').item.json.body?.org_id || '';\nconst tenantId = item.json.tenant_id || $('Webhook - Ingest Contract').item.json.body?.tenant_id || '';\nconst sourceName = item.json.source_name || $('Webhook - Ingest Contract').item.json.body?.source_name || 'unknown';\nconst modelProvider = item.json.model_provider || $('Webhook - Ingest Contract').item.json.body?.model_provider || $('Webhook - Ingest Contract').item.json.headers?.['x-model-provider'] || 'openai';\n\nconst systemPrompt = `You are a contract analysis specialist. Your ONLY job is to extract factual information from the contract text provided. You must NEVER invent, assume, or hallucinate any information.\n\nRULES:\n1. If information is NOT explicitly stated in the contract, return \"NOT SPECIFIED\" for that field.\n2. Extract exact wording where possible. Use direct quotes for conditions and terms.\n3. If a clause is ambiguous, flag it as \"REQUIRES REVIEW\" and quote the exact ambiguous text.\n4. Never fill in \"typical\" or \"industry standard\" values. Only extract what is written.\n\nExtract the following into a JSON object:\n\n{\n  \"contract_metadata\": {\n    \"contract_title\": \"\",\n    \"effective_date\": \"\",\n    \"expiry_date\": \"\",\n    \"auto_renewal\": \"\",\n    \"notice_period_days\": \"\",\n    \"governing_law\": \"\",\n    \"service_provider\": \"\",\n    \"service_consumer\": \"\",\n    \"contract_reference\": \"\",\n    \"organisation\": \"\",\n    \"industry\": \"\",\n    \"review_date\": \"Next scheduled review date (ISO or human-readable). Set to NOT SPECIFIED if not found.\"\n  },\n  \"sla_table\": [\n    {\n      \"priority\": \"P1 / Critical\",\n      \"description\": \"\",\n      \"response_time\": \"\",\n      \"resolution_time\": \"\",\n      \"mitigation_time\": \"\",\n      \"availability_target\": \"\",\n      \"measurement_period\": \"\",\n      \"conditions_triggering_this_priority\": \"\",\n      \"exact_contract_clause_reference\": \"\",\n      \"penalties_or_credits\": \"\"\n    }\n  ],\n  \"uptime_commitments\": {\n    \"target_percentage\": \"\",\n    \"measurement_window\": \"\",\n    \"exclusions\": \"\",\n    \"calculation_method\": \"\",\n    \"exact_clause_reference\": \"\"\n  },\n  \"service_credits\": [\n    {\n      \"trigger_condition\": \"\",\n      \"credit_percentage\": \"\",\n      \"cap_on_credits\": \"\",\n      \"claim_process\": \"\",\n      \"claim_deadline\": \"\",\n      \"exact_clause_reference\": \"\"\n    }\n  ],\n  \"concerns_for_service_provider\": [\n    {\n      \"concern\": \"\",\n      \"relevant_clause\": \"\",\n      \"risk_level\": \"HIGH / MEDIUM / LOW\",\n      \"recommendation\": \"\"\n    }\n  ],\n  \"breach_clauses\": [\n    {\n      \"breach_type\": \"\",\n      \"consequence\": \"\",\n      \"cure_period\": \"\",\n      \"exact_clause_reference\": \"\"\n    }\n  ],\n  \"key_contacts\": {\n    \"provider_contact\": \"\",\n    \"consumer_contact\": \"\",\n    \"escalation_path\": \"\"\n  },\n  \"extraction_confidence\": {\n    \"overall_confidence\": \"HIGH / MEDIUM / LOW\",\n    \"fields_marked_not_specified\": [],\n    \"fields_requiring_review\": [],\n    \"notes\": \"\"\n  }\n}\n\nIMPORTANT: The \"extraction_confidence\" section is mandatory. List every field you could NOT find. This is how we ensure zero hallucination.`;\n\nreturn [{\n  json: {\n    systemPrompt,\n    contractText,\n    org_id: orgId,\n    tenant_id: tenantId,\n    source_name: sourceName,\n    source_type: item.json.source_type || 'unknown',\n    model_provider: modelProvider,\n    char_count: contractText.length,\n    _repair_attempt: item.json._repair_attempt || 0\n  }\n}];"
+      },
+      "id": "node-prepare-prompt",
+      "name": "Prepare AI Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "rules": [
+            {
+              "outputKey": "claude",
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "id": "condition-claude",
+                    "leftValue": "={{ $json.model_provider }}",
+                    "rightValue": "claude",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true
+            }
+          ],
+          "fallbackOutput": {
+            "outputKey": "openai"
+          }
+        },
+        "options": {}
+      },
+      "id": "node-ai-switch",
+      "name": "AI Model Switch",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        1320,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o",
+        "options": {
+          "temperature": 0
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "={{ $json.systemPrompt }}",
+              "role": "system"
+            },
+            {
+              "content": "={{ $json.contractText }}",
+              "role": "user"
+            }
+          ]
+        }
+      },
+      "id": "node-openai-extract",
+      "name": "OpenAI Extraction",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1,
+      "position": [
+        1540,
+        500
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "AkDxnLN26xcz7F8i",
+          "name": "OpenAI (ChatGPT OAuth)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 8192, temperature: 0, system: $json.systemPrompt, messages: [{ role: 'user', content: $json.contractText }] }) }}",
+        "options": {}
+      },
+      "id": "node-claude-extract",
+      "name": "Claude Extraction",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        1540,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "QiWGfItxT5CApbSR",
+          "name": "Claude API (Anthropic)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract text from Claude API response\nconst item = $input.item;\nconst response = item.json;\n\nlet extractionText = '';\nif (response.content && Array.isArray(response.content) && response.content.length > 0) {\n  extractionText = response.content[0].text || '';\n} else if (response.text) {\n  extractionText = response.text;\n}\n\nreturn [{\n  json: {\n    extraction_response: extractionText,\n    model_used: 'claude-sonnet-4-20250514',\n    _model_used: 'claude',\n    org_id: $('Prepare AI Prompt').item.json.org_id,\n    tenant_id: $('Prepare AI Prompt').item.json.tenant_id,\n    source_name: $('Prepare AI Prompt').item.json.source_name,\n    source_type: $('Prepare AI Prompt').item.json.source_type,\n    _repair_attempt: $('Prepare AI Prompt').item.json._repair_attempt\n  }\n}];"
+      },
+      "id": "node-claude-parse-response",
+      "name": "Parse Claude Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normalize OpenAI response\nconst item = $input.item;\nlet extractionText = '';\n\nif (item.json.message?.content) {\n  extractionText = item.json.message.content;\n} else if (item.json.text) {\n  extractionText = item.json.text;\n} else if (typeof item.json === 'string') {\n  extractionText = item.json;\n}\n\nreturn [{\n  json: {\n    extraction_response: extractionText,\n    model_used: 'gpt-4o',\n    _model_used: 'openai',\n    org_id: $('Prepare AI Prompt').item.json.org_id,\n    tenant_id: $('Prepare AI Prompt').item.json.tenant_id,\n    source_name: $('Prepare AI Prompt').item.json.source_name,\n    source_type: $('Prepare AI Prompt').item.json.source_type,\n    _repair_attempt: $('Prepare AI Prompt').item.json._repair_attempt\n  }\n}];"
+      },
+      "id": "node-openai-parse-response",
+      "name": "Parse OpenAI Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "append",
+        "options": {}
+      },
+      "id": "node-merge-ai",
+      "name": "Merge AI Responses",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        1980,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.item;\nconst raw = item.json.extraction_response || '';\n\n// Strip markdown code fences\nlet cleaned = raw.replace(/^```(?:json)?\\s*/i, '').replace(/\\s*```$/i, '').trim();\n\nlet parsed = null;\nlet parseError = null;\nlet needsRepair = false;\n\ntry {\n  parsed = JSON.parse(cleaned);\n} catch (e) {\n  parseError = e.message;\n  needsRepair = true;\n}\n\n// Validate ALL 8 required sections\nif (parsed) {\n  const requiredSections = [\n    'contract_metadata',\n    'sla_table',\n    'uptime_commitments',\n    'service_credits',\n    'concerns_for_service_provider',\n    'breach_clauses',\n    'key_contacts',\n    'extraction_confidence'\n  ];\n  const missingSections = requiredSections.filter(s => !parsed[s]);\n  if (missingSections.length > 0) {\n    parseError = `Missing required sections: ${missingSections.join(', ')}`;\n    needsRepair = true;\n  }\n}\n\n// Count NOT SPECIFIED and REQUIRES REVIEW fields\nlet notSpecifiedCount = 0;\nlet requiresReviewCount = 0;\n\nif (parsed) {\n  const jsonStr = JSON.stringify(parsed);\n  notSpecifiedCount = (jsonStr.match(/NOT SPECIFIED/g) || []).length;\n  requiresReviewCount = (jsonStr.match(/REQUIRES REVIEW/g) || []).length;\n}\n\n// FIX 13: Compute extraction confidence from actual field population\nif (parsed && !needsRepair) {\n  // Count all string fields in the extraction\n  let totalFields = 0;\n  let populatedFields = 0;\n\n  function countFields(obj) {\n    if (typeof obj === 'string') {\n      totalFields++;\n      if (obj && obj !== 'NOT SPECIFIED' && obj !== 'REQUIRES REVIEW' && obj.trim() !== '') {\n        populatedFields++;\n      }\n    } else if (Array.isArray(obj)) {\n      obj.forEach(item => countFields(item));\n    } else if (obj && typeof obj === 'object') {\n      Object.values(obj).forEach(val => countFields(val));\n    }\n  }\n\n  // Count fields excluding extraction_confidence itself\n  const { extraction_confidence, ...dataFields } = parsed;\n  countFields(dataFields);\n\n  const populationRate = totalFields > 0 ? populatedFields / totalFields : 0;\n  let computedConfidence = 'LOW';\n  if (populationRate > 0.8 && requiresReviewCount <= 3) {\n    computedConfidence = 'HIGH';\n  } else if (populationRate >= 0.5 && requiresReviewCount <= 3) {\n    computedConfidence = 'MEDIUM';\n  }\n\n  // Override AI's confidence with computed value\n  if (parsed.extraction_confidence) {\n    parsed.extraction_confidence.overall_confidence = computedConfidence;\n  }\n}\n\nreturn [{\n  json: {\n    extraction: parsed,\n    extraction_raw: raw,\n    _needs_repair: needsRepair,\n    _parse_error: parseError,\n    _repair_attempt: item.json._repair_attempt || 0,\n    _not_specified_count: notSpecifiedCount,\n    _requires_review_count: requiresReviewCount,\n    model_used: item.json.model_used,\n    _model_used: item.json._model_used || item.json.model_used,\n    org_id: item.json.org_id,\n    tenant_id: item.json.tenant_id,\n    source_name: item.json.source_name,\n    source_type: item.json.source_type\n  }\n}];"
+      },
+      "id": "node-parse-validate",
+      "name": "Parse + Validate JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-needs-repair",
+              "leftValue": "={{ $json._needs_repair }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            },
+            {
+              "id": "condition-first-attempt",
+              "leftValue": "={{ $json._repair_attempt }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-needs-repair",
+      "name": "Needs Repair?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2420,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.item;\nconst originalResponse = item.json.extraction_raw || '';\nconst parseError = item.json._parse_error || 'Unknown parse error';\nconst modelUsed = item.json._model_used || 'openai';\n\nconst repairPrompt = `Previous extraction returned invalid JSON. Error: ${parseError}.\n\nOriginal response (first 5000 chars):\n${originalResponse.substring(0, 5000)}\n\nFix the JSON and return a valid JSON object with all required sections: contract_metadata, sla_table, uptime_commitments, service_credits, concerns_for_service_provider, breach_clauses, key_contacts, extraction_confidence.\nReturn ONLY the corrected JSON, no markdown fences or extra text.`;\n\nreturn [{\n  json: {\n    systemPrompt: $('Prepare AI Prompt').item.json.systemPrompt,\n    contractText: repairPrompt,\n    org_id: item.json.org_id,\n    tenant_id: item.json.tenant_id,\n    source_name: item.json.source_name,\n    source_type: item.json.source_type,\n    model_provider: modelUsed,\n    _repair_attempt: 1\n  }\n}];"
+      },
+      "id": "node-repair-retry",
+      "name": "Repair Retry",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "search",
+        "application": "app65IDx6BQUgSYE7",
+        "table": "Organisations",
+        "filterByFormula": "={Organisation Name}=\"{{ $json.extraction.contract_metadata.organisation }}\"",
+        "options": {}
+      },
+      "id": "node-airtable-find-org",
+      "name": "Airtable - Find Organisation",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        500
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_AIRTABLE_CREDENTIAL_ID",
+          "name": "Airtable PAT"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.item;\nconst results = item.json;\nconst extraction = $('Parse + Validate JSON').item.json.extraction;\n\n// Check if org was found\nlet orgRecordId = null;\nif (results && results.id) {\n  orgRecordId = results.id;\n}\n\nreturn [{\n  json: {\n    org_found: !!orgRecordId,\n    org_record_id: orgRecordId,\n    org_name: extraction.contract_metadata.organisation || 'Unknown Organisation',\n    extraction: extraction,\n    org_id: $('Parse + Validate JSON').item.json.org_id,\n    tenant_id: $('Parse + Validate JSON').item.json.tenant_id,\n    source_name: $('Parse + Validate JSON').item.json.source_name,\n    source_type: $('Parse + Validate JSON').item.json.source_type,\n    model_used: $('Parse + Validate JSON').item.json.model_used,\n    _not_specified_count: $('Parse + Validate JSON').item.json._not_specified_count,\n    _requires_review_count: $('Parse + Validate JSON').item.json._requires_review_count\n  }\n}];"
+      },
+      "id": "node-check-org-result",
+      "name": "Check Org Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2860,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-org-found",
+              "leftValue": "={{ $json.org_found }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-org-exists-check",
+      "name": "Org Exists?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        3080,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "application": "app65IDx6BQUgSYE7",
+        "table": "Organisations",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Organisation Name": "={{ $json.org_name }}",
+            "Industry": "={{ $json.extraction.contract_metadata.industry }}",
+            "Created By": "SLA Contract Manager v1"
+          },
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "node-airtable-create-org",
+      "name": "Airtable - Create Organisation",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        3300,
+        600
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_AIRTABLE_CREDENTIAL_ID",
+          "name": "Airtable PAT"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge org record ID from either found or created path\nconst item = $input.item;\nlet orgRecordId = '';\n\n// From the found path\nif (item.json.org_record_id) {\n  orgRecordId = item.json.org_record_id;\n}\n// From the created path (Airtable returns id on create)\nif (item.json.id) {\n  orgRecordId = item.json.id;\n}\n\n// Pull extraction data forward\nconst checkResult = $('Check Org Result').item.json;\n\nreturn [{\n  json: {\n    org_record_id: orgRecordId,\n    extraction: checkResult.extraction,\n    org_id: checkResult.org_id,\n    tenant_id: checkResult.tenant_id,\n    source_name: checkResult.source_name,\n    source_type: checkResult.source_type,\n    model_used: checkResult.model_used,\n    _not_specified_count: checkResult._not_specified_count,\n    _requires_review_count: checkResult._requires_review_count\n  }\n}];"
+      },
+      "id": "node-merge-org-paths",
+      "name": "Merge Org Paths",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3520,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "application": "app65IDx6BQUgSYE7",
+        "table": "Contracts",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Contract Title": "={{ $json.extraction.contract_metadata.contract_title }}",
+            "Effective Date": "={{ $json.extraction.contract_metadata.effective_date }}",
+            "Expiry Date": "={{ $json.extraction.contract_metadata.expiry_date }}",
+            "Auto Renewal": "={{ $json.extraction.contract_metadata.auto_renewal }}",
+            "Notice Period Days": "={{ $json.extraction.contract_metadata.notice_period_days }}",
+            "Governing Law": "={{ $json.extraction.contract_metadata.governing_law }}",
+            "Service Provider": "={{ $json.extraction.contract_metadata.service_provider }}",
+            "Service Consumer": "={{ $json.extraction.contract_metadata.service_consumer }}",
+            "Contract Reference": "={{ $json.extraction.contract_metadata.contract_reference }}",
+            "Organisation": "={{ [$json.org_record_id] }}",
+            "Industry": "={{ $json.extraction.contract_metadata.industry }}",
+            "Extraction Confidence": "={{ $json.extraction.extraction_confidence.overall_confidence }}",
+            "Fields Not Found": "={{ $json.extraction.extraction_confidence.fields_marked_not_specified.join(', ') }}",
+            "Fields Needing Review": "={{ $json.extraction.extraction_confidence.fields_requiring_review.join(', ') }}",
+            "Extraction Notes": "={{ $json.extraction.extraction_confidence.notes }}",
+            "Source Name": "={{ $json.source_name }}",
+            "Source Type": "={{ $json.source_type }}",
+            "Model Used": "={{ $json.model_used }}",
+            "Not Specified Count": "={{ $json._not_specified_count }}",
+            "Requires Review Count": "={{ $json._requires_review_count }}",
+            "Source": "Extracted",
+            "Status": "Active",
+            "Provider Contact": "={{ $json.extraction.key_contacts.provider_contact }}",
+            "Consumer Contact": "={{ $json.extraction.key_contacts.consumer_contact }}",
+            "Escalation Path": "={{ $json.extraction.key_contacts.escalation_path }}",
+            "Review Date": "={{ $json.extraction.contract_metadata.review_date }}"
+          },
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "node-airtable-create-contract",
+      "name": "Airtable - Create Contract",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        3740,
+        500
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_AIRTABLE_CREDENTIAL_ID",
+          "name": "Airtable PAT"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepare SLA table items for batch creation\nconst item = $input.item;\nconst contractRecordId = item.json.id;\nconst orgRecordId = $('Merge Org Paths').item.json.org_record_id;\nconst extraction = $('Merge Org Paths').item.json.extraction;\nconst slaTable = extraction.sla_table || [];\n\nconst items = slaTable.map((sla, index) => ({\n  json: {\n    contract_record_id: contractRecordId,\n    priority: sla.priority || '',\n    description: sla.description || '',\n    response_time: sla.response_time || '',\n    resolution_time: sla.resolution_time || '',\n    mitigation_time: sla.mitigation_time || '',\n    availability_target: sla.availability_target || '',\n    measurement_period: sla.measurement_period || '',\n    conditions: sla.conditions_triggering_this_priority || '',\n    clause_reference: sla.exact_contract_clause_reference || '',\n    penalties_or_credits: sla.penalties_or_credits || '',\n    source: 'Extracted',\n    org_record_id: orgRecordId,\n    _index: index,\n    _total: slaTable.length\n  }\n}));\n\nreturn items.length > 0 ? items : [{ json: { _skip: true, contract_record_id: contractRecordId } }];"
+      },
+      "id": "node-prepare-sla-items",
+      "name": "Prepare SLA Items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3960,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "node-sla-split-batches",
+      "name": "SLA Split In Batches",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        4180,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "condition-skip-sla",
+              "leftValue": "={{ $json._skip }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "notTrue"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-sla-skip-check",
+      "name": "SLA Has Items?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        4400,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "application": "app65IDx6BQUgSYE7",
+        "table": "SLA Priorities",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Contract": "={{ [$json.contract_record_id] }}",
+            "Priority": "={{ $json.priority }}",
+            "Description": "={{ $json.description }}",
+            "Response Time": "={{ $json.response_time }}",
+            "Resolution Time": "={{ $json.resolution_time }}",
+            "Mitigation Time": "={{ $json.mitigation_time }}",
+            "Availability Target": "={{ $json.availability_target }}",
+            "Measurement Period": "={{ $json.measurement_period }}",
+            "Triggering Conditions": "={{ $json.conditions }}",
+            "Clause Reference": "={{ $json.clause_reference }}",
+            "Penalties or Credits": "={{ $json.penalties_or_credits }}",
+            "Source": "Extracted",
+            "Organisation": "={{ [$json.org_record_id] }}"
+          },
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "node-airtable-create-sla",
+      "name": "Airtable - Create SLA Priority",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        4620,
+        400
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_AIRTABLE_CREDENTIAL_ID",
+          "name": "Airtable PAT"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepare uptime commitment record\nconst contractRecordId = $('Airtable - Create Contract').item.json.id;\nconst orgRecordId = $('Merge Org Paths').item.json.org_record_id;\nconst extraction = $('Merge Org Paths').item.json.extraction;\nconst uptime = extraction.uptime_commitments || {};\n\nreturn [{\n  json: {\n    contract_record_id: contractRecordId,\n    target_percentage: uptime.target_percentage || '',\n    measurement_window: uptime.measurement_window || '',\n    exclusions: uptime.exclusions || '',\n    calculation_method: uptime.calculation_method || '',\n    clause_reference: uptime.exact_clause_reference || '',\n    org_record_id: orgRecordId\n  }\n}];"
+      },
+      "id": "node-prepare-uptime",
+      "name": "Prepare Uptime Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4840,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "application": "app65IDx6BQUgSYE7",
+        "table": "Uptime Commitments",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Contract": "={{ [$json.contract_record_id] }}",
+            "Target Percentage": "={{ $json.target_percentage }}",
+            "Measurement Window": "={{ $json.measurement_window }}",
+            "Exclusions": "={{ $json.exclusions }}",
+            "Calculation Method": "={{ $json.calculation_method }}",
+            "Clause Reference": "={{ $json.clause_reference }}",
+            "Source": "Extracted",
+            "Organisation": "={{ [$json.org_record_id] }}"
+          },
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "node-airtable-create-uptime",
+      "name": "Airtable - Create Uptime Commitment",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        5060,
+        500
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_AIRTABLE_CREDENTIAL_ID",
+          "name": "Airtable PAT"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepare service credit items for batch creation\nconst contractRecordId = $('Airtable - Create Contract').item.json.id;\nconst orgRecordId = $('Merge Org Paths').item.json.org_record_id;\nconst extraction = $('Merge Org Paths').item.json.extraction;\nconst credits = extraction.service_credits || [];\n\nconst items = credits.map((credit, index) => ({\n  json: {\n    contract_record_id: contractRecordId,\n    trigger_condition: credit.trigger_condition || '',\n    credit_percentage: credit.credit_percentage || '',\n    cap_on_credits: credit.cap_on_credits || '',\n    claim_process: credit.claim_process || '',\n    claim_deadline: credit.claim_deadline || '',\n    clause_reference: credit.exact_clause_reference || '',\n    org_record_id: orgRecordId,\n    _index: index,\n    _total: credits.length\n  }\n}));\n\nreturn items.length > 0 ? items : [{ json: { _skip: true, contract_record_id: contractRecordId } }];"
+      },
+      "id": "node-prepare-credits",
+      "name": "Prepare Credit Items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5280,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "node-credits-split-batches",
+      "name": "Credits Split In Batches",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        5500,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "condition-skip-credit",
+              "leftValue": "={{ $json._skip }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "notTrue"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-credits-skip-check",
+      "name": "Credits Has Items?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        5720,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "application": "app65IDx6BQUgSYE7",
+        "table": "Service Credits",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Contract": "={{ [$json.contract_record_id] }}",
+            "Trigger Condition": "={{ $json.trigger_condition }}",
+            "Credit Percentage": "={{ $json.credit_percentage }}",
+            "Cap on Credits": "={{ $json.cap_on_credits }}",
+            "Claim Process": "={{ $json.claim_process }}",
+            "Claim Deadline": "={{ $json.claim_deadline }}",
+            "Clause Reference": "={{ $json.clause_reference }}",
+            "Source": "Extracted",
+            "Organisation": "={{ [$json.org_record_id] }}"
+          },
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "node-airtable-create-credit",
+      "name": "Airtable - Create Service Credit",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        5940,
+        400
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_AIRTABLE_CREDENTIAL_ID",
+          "name": "Airtable PAT"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepare concern items for batch creation\nconst contractRecordId = $('Airtable - Create Contract').item.json.id;\nconst orgRecordId = $('Merge Org Paths').item.json.org_record_id;\nconst extraction = $('Merge Org Paths').item.json.extraction;\nconst concerns = extraction.concerns_for_service_provider || [];\n\nconst items = concerns.map((concern, index) => ({\n  json: {\n    contract_record_id: contractRecordId,\n    concern: concern.concern || '',\n    relevant_clause: concern.relevant_clause || '',\n    risk_level: concern.risk_level || '',\n    recommendation: concern.recommendation || '',\n    org_record_id: orgRecordId,\n    _index: index,\n    _total: concerns.length\n  }\n}));\n\nreturn items.length > 0 ? items : [{ json: { _skip: true, contract_record_id: contractRecordId } }];"
+      },
+      "id": "node-prepare-concerns",
+      "name": "Prepare Concern Items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        6160,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "node-concerns-split-batches",
+      "name": "Concerns Split In Batches",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        6380,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "condition-skip-concern",
+              "leftValue": "={{ $json._skip }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "notTrue"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-concerns-skip-check",
+      "name": "Concerns Has Items?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        6600,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "application": "app65IDx6BQUgSYE7",
+        "table": "Concerns and Risks",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Contract": "={{ [$json.contract_record_id] }}",
+            "Concern": "={{ $json.concern }}",
+            "Relevant Clause": "={{ $json.relevant_clause }}",
+            "Risk Level": "={{ $json.risk_level }}",
+            "Recommendation": "={{ $json.recommendation }}",
+            "Status": "Open",
+            "Source": "Extracted",
+            "Organisation": "={{ [$json.org_record_id] }}"
+          },
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "node-airtable-create-concern",
+      "name": "Airtable - Create Concern",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        6820,
+        400
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_AIRTABLE_CREDENTIAL_ID",
+          "name": "Airtable PAT"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepare breach clause items for batch creation\nconst contractRecordId = $('Airtable - Create Contract').item.json.id;\nconst orgRecordId = $('Merge Org Paths').item.json.org_record_id;\nconst extraction = $('Merge Org Paths').item.json.extraction;\nconst breaches = extraction.breach_clauses || [];\n\nconst items = breaches.map((breach, index) => ({\n  json: {\n    contract_record_id: contractRecordId,\n    breach_type: breach.breach_type || '',\n    consequence: breach.consequence || '',\n    cure_period: breach.cure_period || '',\n    clause_reference: breach.exact_clause_reference || '',\n    org_record_id: orgRecordId,\n    _index: index,\n    _total: breaches.length\n  }\n}));\n\nreturn items.length > 0 ? items : [{ json: { _skip: true, contract_record_id: contractRecordId } }];"
+      },
+      "id": "node-prepare-breaches",
+      "name": "Prepare Breach Items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        7040,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "node-breaches-split-batches",
+      "name": "Breaches Split In Batches",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        7260,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "condition-skip-breach",
+              "leftValue": "={{ $json._skip }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "notTrue"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-breaches-skip-check",
+      "name": "Breaches Has Items?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        7480,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "application": "app65IDx6BQUgSYE7",
+        "table": "Breach Clauses",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Contract": "={{ [$json.contract_record_id] }}",
+            "Breach Type": "={{ $json.breach_type }}",
+            "Consequence": "={{ $json.consequence }}",
+            "Cure Period": "={{ $json.cure_period }}",
+            "Clause Reference": "={{ $json.clause_reference }}",
+            "Source": "Extracted",
+            "Organisation": "={{ [$json.org_record_id] }}"
+          },
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "node-airtable-create-breach",
+      "name": "Airtable - Create Breach Clause",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        7700,
+        400
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_AIRTABLE_CREDENTIAL_ID",
+          "name": "Airtable PAT"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Final summary — log success\nconst contractRecord = $('Airtable - Create Contract').item.json;\nconst extraction = $('Merge Org Paths').item.json.extraction;\nconst checkResult = $('Merge Org Paths').item.json;\n\nconst slaCount = (extraction.sla_table || []).length;\nconst creditsCount = (extraction.service_credits || []).length;\nconst concernsCount = (extraction.concerns_for_service_provider || []).length;\nconst breachCount = (extraction.breach_clauses || []).length;\n\nconst summary = {\n  status: 'complete',\n  contract_id: contractRecord.id || 'unknown',\n  contract_title: extraction.contract_metadata.contract_title || 'Untitled',\n  org_id: checkResult.org_id,\n  tenant_id: checkResult.tenant_id,\n  org_record_id: checkResult.org_record_id,\n  model_used: checkResult.model_used,\n  source_name: checkResult.source_name,\n  source_type: checkResult.source_type,\n  records_created: {\n    sla_priorities: slaCount,\n    uptime_commitments: 1,\n    service_credits: creditsCount,\n    concerns: concernsCount,\n    breach_clauses: breachCount,\n    total: slaCount + 1 + creditsCount + concernsCount + breachCount + 2\n  },\n  extraction_confidence: extraction.extraction_confidence.overall_confidence,\n  not_specified_count: checkResult._not_specified_count,\n  requires_review_count: checkResult._requires_review_count,\n  completed_at: new Date().toISOString()\n};\n\nconsole.log('SLA Contract Manager — Pipeline Complete', JSON.stringify(summary, null, 2));\n\nreturn [{ json: summary }];"
+      },
+      "id": "node-complete",
+      "name": "Complete - Log Success",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        7920,
+        500
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "node-error-trigger",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        1200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.item;\nconst errorData = {\n  nodeName: item.json.execution?.error?.node?.name || item.json.node?.name || 'unknown',\n  errorMessage: item.json.execution?.error?.message || item.json.error?.message || 'Unknown error',\n  inputData: JSON.stringify(item.json).substring(0, 500),\n  timestamp: new Date().toISOString()\n};\n\nconsole.log('WORKFLOW ERROR:', JSON.stringify(errorData, null, 2));\n\nreturn [{ json: errorData }];"
+      },
+      "id": "node-log-error",
+      "name": "Log Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        1200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Try to find contract_record_id from the execution context\nconst execution = $json;\nlet contractId = null;\n\n// Check if contract was created before the error\ntry {\n  const data = execution.execution?.data;\n  if (data?.resultData?.runData?.['Airtable - Create Contract']) {\n    const contractResult = data.resultData.runData['Airtable - Create Contract'];\n    contractId = contractResult[0]?.data?.main?.[0]?.[0]?.json?.id;\n  }\n} catch(e) {}\n\nreturn [{ json: { ...execution, contract_record_id: contractId, has_contract: !!contractId } }];"
+      },
+      "id": "node-extract-contract-id",
+      "name": "Extract Contract ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        1200
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-has-contract",
+              "leftValue": "={{ $json.has_contract }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-if-has-contract",
+      "name": "Has Contract Record?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        660,
+        1200
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "application": "app65IDx6BQUgSYE7",
+        "table": "Contracts",
+        "id": "={{ $json.contract_record_id }}",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldName": "Status",
+              "fieldValue": "Extraction Failed"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "node-mark-contract-failed",
+      "name": "Mark Contract Failed",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        880,
+        1100
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "REPLACE_AIRTABLE_CREDENTIAL_ID",
+          "name": "Airtable PAT"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-is-valid",
+              "leftValue": "={{ $json._needs_repair }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "notTrue"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-repair-result-check",
+      "name": "Extraction Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        600
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{\n  json: {\n    status: 'failed',\n    error: 'JSON validation failed after repair retry',\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "node-extraction-failed",
+      "name": "Extraction Failed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2860,
+        700
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: false, error: 'Extraction failed after repair retry' }) }}",
+        "responseCode": 500,
+        "options": {}
+      },
+      "id": "node-respond-500",
+      "name": "Respond 500 Failed",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        3080,
+        700
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook - Ingest Contract": {
+      "main": [
+        [
+          {
+            "node": "Respond 202 Accepted",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "File Type Router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "File Type Router": {
+      "main": [
+        [
+          {
+            "node": "PDF Text Extraction",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Word Text Extraction",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Excel Read Spreadsheet",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Plain Text Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PDF Text Extraction": {
+      "main": [
+        [
+          {
+            "node": "Merge Extraction Paths",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Word Text Extraction": {
+      "main": [
+        [
+          {
+            "node": "Merge Extraction Paths",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Excel Read Spreadsheet": {
+      "main": [
+        [
+          {
+            "node": "Excel Rows to Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Excel Rows to Text": {
+      "main": [
+        [
+          {
+            "node": "Merge Extraction Paths",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Plain Text Fallback": {
+      "main": [
+        [
+          {
+            "node": "Merge Extraction Paths",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Extraction Paths": {
+      "main": [
+        [
+          {
+            "node": "Prepare AI Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare AI Prompt": {
+      "main": [
+        [
+          {
+            "node": "AI Model Switch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Model Switch": {
+      "main": [
+        [
+          {
+            "node": "Claude Extraction",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "OpenAI Extraction",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude Extraction": {
+      "main": [
+        [
+          {
+            "node": "Parse Claude Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Claude Response": {
+      "main": [
+        [
+          {
+            "node": "Merge AI Responses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Extraction": {
+      "main": [
+        [
+          {
+            "node": "Parse OpenAI Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ],
+      "error": [
+        [
+          {
+            "node": "Claude Extraction",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse OpenAI Response": {
+      "main": [
+        [
+          {
+            "node": "Merge AI Responses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge AI Responses": {
+      "main": [
+        [
+          {
+            "node": "Parse + Validate JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse + Validate JSON": {
+      "main": [
+        [
+          {
+            "node": "Needs Repair?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Needs Repair?": {
+      "main": [
+        [
+          {
+            "node": "Repair Retry",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Extraction Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Repair Retry": {
+      "main": [
+        [
+          {
+            "node": "AI Model Switch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Airtable - Find Organisation": {
+      "main": [
+        [
+          {
+            "node": "Check Org Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Org Result": {
+      "main": [
+        [
+          {
+            "node": "Org Exists?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Org Exists?": {
+      "main": [
+        [
+          {
+            "node": "Merge Org Paths",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Airtable - Create Organisation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Airtable - Create Organisation": {
+      "main": [
+        [
+          {
+            "node": "Merge Org Paths",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Org Paths": {
+      "main": [
+        [
+          {
+            "node": "Airtable - Create Contract",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Airtable - Create Contract": {
+      "main": [
+        [
+          {
+            "node": "Prepare SLA Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare SLA Items": {
+      "main": [
+        [
+          {
+            "node": "SLA Split In Batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SLA Split In Batches": {
+      "main": [
+        [
+          {
+            "node": "SLA Has Items?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SLA Has Items?": {
+      "main": [
+        [
+          {
+            "node": "Airtable - Create SLA Priority",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Uptime Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Airtable - Create SLA Priority": {
+      "main": [
+        [
+          {
+            "node": "SLA Split In Batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Uptime Data": {
+      "main": [
+        [
+          {
+            "node": "Airtable - Create Uptime Commitment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Airtable - Create Uptime Commitment": {
+      "main": [
+        [
+          {
+            "node": "Prepare Credit Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Credit Items": {
+      "main": [
+        [
+          {
+            "node": "Credits Split In Batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Credits Split In Batches": {
+      "main": [
+        [
+          {
+            "node": "Credits Has Items?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Credits Has Items?": {
+      "main": [
+        [
+          {
+            "node": "Airtable - Create Service Credit",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Concern Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Airtable - Create Service Credit": {
+      "main": [
+        [
+          {
+            "node": "Credits Split In Batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Concern Items": {
+      "main": [
+        [
+          {
+            "node": "Concerns Split In Batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Concerns Split In Batches": {
+      "main": [
+        [
+          {
+            "node": "Concerns Has Items?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Concerns Has Items?": {
+      "main": [
+        [
+          {
+            "node": "Airtable - Create Concern",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Breach Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Airtable - Create Concern": {
+      "main": [
+        [
+          {
+            "node": "Concerns Split In Batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Breach Items": {
+      "main": [
+        [
+          {
+            "node": "Breaches Split In Batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Breaches Split In Batches": {
+      "main": [
+        [
+          {
+            "node": "Breaches Has Items?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Breaches Has Items?": {
+      "main": [
+        [
+          {
+            "node": "Airtable - Create Breach Clause",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Complete - Log Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Airtable - Create Breach Clause": {
+      "main": [
+        [
+          {
+            "node": "Breaches Split In Batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Error": {
+      "main": [
+        [
+          {
+            "node": "Extract Contract ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Contract ID": {
+      "main": [
+        [
+          {
+            "node": "Has Contract Record?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Contract Record?": {
+      "main": [
+        [
+          {
+            "node": "Mark Contract Failed",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Extraction Valid?": {
+      "main": [
+        [
+          {
+            "node": "Airtable - Find Organisation",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Extraction Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extraction Failed": {
+      "main": [
+        [
+          {
+            "node": "Respond 500 Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "meta": {}
+}

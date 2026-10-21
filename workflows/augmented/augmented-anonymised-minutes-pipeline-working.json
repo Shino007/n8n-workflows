@@ -1,0 +1,435 @@
+{
+  "id": "RkxgQVpXl2yfoQnV",
+  "name": "Augmented — Anonymised Minutes Pipeline (Working)",
+  "active": true,
+  "tags": [],
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## TWO WAYS TO RUN\n\nA) MANUAL / ON-DEMAND: hit 'Execute Workflow' — the 'Get Latest Transcript' node pulls the most recent Fireflies meeting and the pipeline runs on it.\n\nB) AUTOMATIC: Fireflies webhook fires when a transcript is ready (paste this workflow's production webhook URL into Fireflies → Settings → Webhooks).\n\nSETUP REMINDERS\n1. Replace YOUR_FIREFLIES_API_KEY in 'Get Latest Transcript', 'Fetch Transcript' and 'Delete Fireflies Transcript' (better: use a Header Auth credential)\n2. Replace YOUR_NOTION_API_KEY and YOUR_PARENT_PAGE_ID in 'Create Notion Page'\n3. Enable 'Delete Fireflies Transcript' after first successful end-to-end test\n4. SECURITY: rotate your Fireflies key if it has ever been shared or exported in this file.",
+        "height": 380,
+        "width": 420
+      },
+      "name": "Setup Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "c80a849a-b4b1-4ea9-bab2-2191030af618"
+    },
+    {
+      "parameters": {},
+      "name": "Run Manually",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        224,
+        416
+      ],
+      "id": "d642038a-d5b9-4b02-909d-f8724451995e"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.fireflies.ai/graphql",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer REDACTED_TOKEN"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{ \"query\": \"query { transcripts(limit: 1) { id title date } }\" }",
+        "options": {}
+      },
+      "name": "Get Latest Transcript",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        448,
+        416
+      ],
+      "id": "42506be2-5a97-405d-98e0-24b37ec767e3"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "fireflies-transcript",
+        "options": {}
+      },
+      "name": "Fireflies Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        448,
+        240
+      ],
+      "webhookId": "fireflies-transcript",
+      "id": "09382e43-df92-4ca9-b71d-efcd70716441"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.fireflies.ai/graphql",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer REDACTED_TOKEN"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ query: \"query Transcript($id: String!) { transcript(id: $id) { id title date duration sentences { speaker_name text } } }\", variables: { id: $json.body?.meetingId || $json.body?.meeting_id || $json.data?.transcripts?.[0]?.id || '' } }) }}",
+        "options": {}
+      },
+      "name": "Fetch Transcript",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        672,
+        240
+      ],
+      "id": "4a0d2951-d19a-4a71-80bc-71b26ee3e6a5"
+    },
+    {
+      "parameters": {
+        "jsCode": "const resp = $input.first().json;\n\nif (resp.errors) {\n  throw new Error('Fireflies API error: ' + JSON.stringify(resp.errors.map(e => e.message)));\n}\nconst t = resp.data?.transcript ?? resp.transcript;\nif (!t) {\n  throw new Error('Unexpected Fireflies response shape. Top-level keys: ' + Object.keys(resp).join(', '));\n}\nif (!t.sentences || !t.sentences.length) {\n  throw new Error('Transcript ' + (t.id || '?') + ' has no sentences yet — it may still be processing.');\n}\n\n// Deterministic speaker -> Participant letter mapping\nconst letters = 'ABCDEFGHIJKLMNOP';\nconst map = {};\nlet n = 0;\nfor (const s of t.sentences) {\n  const name = s.speaker_name || 'Unknown';\n  if (!(name in map)) map[name] = 'Participant ' + letters[n++];\n}\nconst lines = t.sentences.map(s => `${map[s.speaker_name || 'Unknown']}: ${s.text}`);\n\nreturn [{\n  json: {\n    transcriptId: t.id,\n    sessionDate: t.date,\n    durationMins: Math.round(t.duration || 0),\n    speakerCount: Object.keys(map).length,\n    transcriptText: lines.join('\\n')\n  }\n}];"
+      },
+      "name": "Format Transcript",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        240
+      ],
+      "id": "5a1ae2ae-1a7a-4b30-9707-50456eb9085a"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o",
+          "mode": "list",
+          "cachedResultName": "gpt-4o"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You identify identifying information in a meeting transcript from a small UK tech peer-coaching group. Speakers are already labelled Participant A, B, C. Your ONLY output is a JSON array of terms that must be redacted, each with a replacement.\n\nFind every instance of:\n1. Human names spoken in conversation (first names, surnames, nicknames — e.g. names used when passing turns) → replacement \"[another member]\" for group members, \"[their colleague]\" / \"[their partner]\" / \"[a friend]\" for others.\n2. Company/organisation names where a participant works, worked, applied to, or is affiliated with → \"[a company]\", \"[a former employer]\", \"[a company they applied to]\". Include famous organisations if they reveal a participant's employer (e.g. a public institution someone works at → \"[a large public institution]\").\n3. Names of products/apps/projects that a participant or their employer built or sells (including lowercase informal names) → \"[their product]\", \"[their side project]\".\n4. Do NOT include: widely-used tools participants merely use with no affiliation (e.g. Claude, GitHub, Notion, Obsidian, Excel, Fireflies), generic tech terms, book titles, or public figures mentioned only as cultural references.\n5. Locations more specific than the UK → \"[a city]\".\n\nRules: include every distinct spelling/variant you see as its own entry (including misspelled or oddly transcribed versions of names). Use the same replacement for the same entity everywhere.\n\nOutput ONLY the JSON array, no commentary, no markdown fences:\n[{\"term\": \"Zoopla\", \"replacement\": \"[a former employer]\"}, {\"term\": \"Kieran\", \"replacement\": \"[another member]\"}]",
+              "role": "system"
+            },
+            {
+              "content": "={{ $json.transcriptText }}"
+            }
+          ]
+        },
+        "options": {
+          "maxTokens": 4096,
+          "temperature": 0
+        }
+      },
+      "name": "Scrub Transcript (OpenAI)",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        1104,
+        208
+      ],
+      "id": "acc79050-0510-44b8-8ea4-f138b80ee2b9",
+      "credentials": {
+        "openAiApi": {
+          "id": "hi9jgbWx4TTKkRVO",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o",
+          "mode": "list",
+          "cachedResultName": "gpt-4o"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You write the session minutes for 'Augmented', a monthly peer coaching group for tech innovators. You will receive an ANONYMISED transcript (participants labelled Participant A, B, C...). Sessions follow a roundtable format: welcome, check-in round (going well / looking forward to / struggling with), then AS MANY deep-dive rounds as time allows (typically 1–3; a challenge is selected → the asker paints the picture → clarifying questions → advice round → asker's reflection), and a two-word close.\n\nABSOLUTE RULES:\n- NEVER attribute content to any individual — no participant labels in the minutes. Write 'the group', 'one member', 'the asker'.\n- The ONLY exception: each round's asker may be referenced as 'the asker' (never by label).\n- Do not reintroduce or infer any names, companies, sectors, job titles, or identifying details, even if traces remain in the transcript.\n- Aggregate, don't enumerate: check-in items become themes, not per-person lists.\n- DETECT ALL DEEP-DIVE ROUNDS. A new round starts whenever the group turns to a new person's challenge (a vote, a handover like 'do you want to run the next one', or a new person painting their picture). Produce a separate 'Round N' section for EVERY round that occurred — never merge rounds or drop later ones. There is no upper limit on rounds.\n- TWO-WORD CLOSE: near the end of the session the facilitator asks everyone for 'two words' on how they're leaving. Find each person's response and reproduce it verbatim as a comma-separated list (entries may be longer or shorter than two words, and may be corrected or joked about — capture the final version each person settled on). These contain no identifying information. Never paraphrase, thematise, or invent entries. Only write 'Not covered this session' if no such round exists anywhere in the transcript.\n- Do not state a participant count as fact — speaker detection is unreliable (one person rejoining on another device creates a duplicate). If mentioned at all, say 'approximately N participants'.\n- Keep it concise — this is a reference document, not a transcript.\n- If a section did not happen in this session, write 'Not covered this session.'\n\nOUTPUT EXACTLY THIS STRUCTURE (markdown, no code fences):\n\n# Augmented — Session Minutes\n\n## Session overview\n(2–3 sentences: purpose and shape of the session — including how many deep-dive rounds were run — and overall tone. No participant count unless approximate.)\n\n## Check-in themes\n**Going well:** (aggregated themes)\n**Looking forward to:** (aggregated themes)\n**Struggles raised:** (aggregated, generalised — these were the candidate challenges)\n\n## Round 1 — (short generic label for the challenge, e.g. 'Idea generation outpaced by execution')\n**Challenge:** (2–3 sentence generic description of the asker's problem and what's at stake)\n**Clarifying questions asked:** (bulleted list, unattributed)\n**Advice offered:** (bulleted list of distinct suggestions, unattributed — 'the group suggested...')\n**Asker's reflection:** (what the asker said they took away and will try)\n\n## Round 2 — (label)\n(Same sub-structure. Repeat '## Round N' for every additional round that occurred. Omit unused round sections entirely.)\n\n## Two-word close\n(Verbatim closing words/phrases, comma-separated, no attribution.)\n\n## Process notes\n(Format/timing/logistics worth remembering — group process changes discussed, next session date if mentioned. Do not include personal content here.)",
+              "role": "system"
+            },
+            {
+              "content": "=Session date: {{ $json.sessionDate }} | Duration: {{ $json.durationMins }} mins | Participants: {{ $json.speakerCount }}\n\nANONYMISED TRANSCRIPT:\n{{ $json.scrubbedTranscript }}"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.3
+        }
+      },
+      "name": "Generate Minutes (OpenAI)",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        1808,
+        192
+      ],
+      "id": "c017522d-6df7-4dc9-948c-b7b4e1b5634d",
+      "credentials": {
+        "openAiApi": {
+          "id": "hi9jgbWx4TTKkRVO",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Convert the minutes markdown into Notion blocks (chunked under the 2000-char block limit)\nconst j = $input.first().json;\nconst md = j.message?.content || j.choices?.[0]?.message?.content || j.output || j.text;\nif (!md) throw new Error('Could not read minutes from OpenAI node output.');\n\nconst meta = $('Apply Redactions').first().json;\nconst blocks = [];\nfor (const rawLine of md.split('\\n')) {\n  const line = rawLine.trimEnd();\n  if (!line.trim()) continue;\n  const rt = (text) => [{ type: 'text', text: { content: text.slice(0, 1990) } }];\n  if (line.startsWith('# ')) {\n    blocks.push({ object: 'block', type: 'heading_1', heading_1: { rich_text: rt(line.slice(2)) } });\n  } else if (line.startsWith('## ')) {\n    blocks.push({ object: 'block', type: 'heading_2', heading_2: { rich_text: rt(line.slice(3)) } });\n  } else if (line.startsWith('- ') || line.startsWith('* ')) {\n    blocks.push({ object: 'block', type: 'bulleted_list_item', bulleted_list_item: { rich_text: rt(line.slice(2)) } });\n  } else {\n    // Handle **bold intro:** lines and plain paragraphs the same way (plain text, Notion-safe)\n    blocks.push({ object: 'block', type: 'paragraph', paragraph: { rich_text: rt(line.replace(/\\*\\*/g, '')) } });\n  }\n}\n\nconst dateStr = meta.sessionDate ? new Date(meta.sessionDate).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);\nreturn [{ json: { pageTitle: `Augmented minutes — ${dateStr}`, childrenBlocks: blocks.slice(0, 95), transcriptId: $('Format Transcript').first().json.transcriptId } }];"
+      },
+      "name": "Build Notion Blocks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2176,
+        240
+      ],
+      "id": "7c895366-03e2-478a-a2cc-b46c5db1a0bc"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.notion.com/v1/pages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer REDACTED_TOKEN"
+            },
+            {
+              "name": "Notion-Version",
+              "value": "2022-06-28"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ parent: { page_id: '39af284d01f6809f93cacd4088d019af' }, properties: { title: { title: [{ type: 'text', text: { content: $json.pageTitle } }] } }, children: $json.childrenBlocks }) }}",
+        "options": {}
+      },
+      "name": "Create Notion Page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2400,
+        240
+      ],
+      "id": "28cd40df-2e10-4c22-a829-962c1007ea77"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.fireflies.ai/graphql",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_FIREFLIES_API_KEY"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ query: \"mutation DeleteTranscript($id: String!) { deleteTranscript(id: $id) { id title } }\", variables: { id: $json.transcriptId } }) }}",
+        "options": {}
+      },
+      "name": "Delete Fireflies Transcript",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2624,
+        240
+      ],
+      "id": "d67c6eef-6258-4925-b78e-4351af99e317"
+    },
+    {
+      "parameters": {
+        "jsCode": "const j = $input.first().json;\nconst raw = j.message?.content || j.choices?.[0]?.message?.content || j.output || j.text;\nif (!raw) throw new Error('No entity list returned from OpenAI.');\n\nlet entities;\ntry {\n  entities = JSON.parse(raw.replace(/```json|```/g, '').trim());\n} catch (e) {\n  throw new Error('Entity list was not valid JSON: ' + raw.slice(0, 300));\n}\nif (!Array.isArray(entities)) throw new Error('Entity list is not an array.');\n\nconst meta = $('Format Transcript').first().json;\nlet text = meta.transcriptText;\n\n// Longest terms first so \"Build Circle\" is replaced before \"Circle\"\nentities.sort((a, b) => (b.term || '').length - (a.term || '').length);\n\nconst counts = [];\nfor (const e of entities) {\n  if (!e.term || !e.replacement) continue;\n  const escaped = e.term.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');\n  const re = new RegExp('\\\\b' + escaped + \"(?:'s)?\\\\b\", 'gi');\n  const n = (text.match(re) || []).length;\n  text = text.replace(re, e.replacement);\n  if (n > 0) counts.push(`${e.term} x${n}`);\n}\n\nreturn [{ json: {\n  scrubbedTranscript: text,\n  redactionLog: counts.join(', '),\n  entityCount: entities.length,\n  sessionDate: meta.sessionDate,\n  durationMins: meta.durationMins,\n  speakerCount: meta.speakerCount\n}}];"
+      },
+      "name": "Apply Redactions",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1424,
+        192
+      ],
+      "id": "18c66dde-f21b-4bd5-8484-3b8b0758b3f9"
+    },
+    {
+      "parameters": {
+        "amount": 60
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1632,
+        192
+      ],
+      "id": "2b0afa1c-3578-4954-939c-934a5825a11a",
+      "name": "Wait",
+      "webhookId": "226ac080-0591-47d0-a235-79fc2a40b1d9"
+    }
+  ],
+  "connections": {
+    "Run Manually": {
+      "main": [
+        [
+          {
+            "node": "Get Latest Transcript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Latest Transcript": {
+      "main": [
+        [
+          {
+            "node": "Fetch Transcript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fireflies Webhook": {
+      "main": [
+        [
+          {
+            "node": "Fetch Transcript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Transcript": {
+      "main": [
+        [
+          {
+            "node": "Format Transcript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Transcript": {
+      "main": [
+        [
+          {
+            "node": "Scrub Transcript (OpenAI)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scrub Transcript (OpenAI)": {
+      "main": [
+        [
+          {
+            "node": "Apply Redactions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Minutes (OpenAI)": {
+      "main": [
+        [
+          {
+            "node": "Build Notion Blocks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Notion Blocks": {
+      "main": [
+        [
+          {
+            "node": "Create Notion Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Notion Page": {
+      "main": [
+        [
+          {
+            "node": "Delete Fireflies Transcript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Redactions": {
+      "main": [
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "Generate Minutes (OpenAI)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "meta": {}
+}

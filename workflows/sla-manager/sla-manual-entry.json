@@ -1,0 +1,1744 @@
+{
+  "id": "qLOvzqRRDl1Fy1JV",
+  "name": "SLA Manual Entry",
+  "active": false,
+  "tags": [],
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "manual-sla-entry",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "node-webhook-sla",
+      "name": "Webhook - Manual SLA Entry",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        304
+      ],
+      "webhookId": "manual-sla-entry"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\nconst errors = [];\n\nif (!body.org_name || typeof body.org_name !== 'string' || body.org_name.trim() === '') {\n  errors.push('org_name is required');\n}\nif (!body.contract_id || typeof body.contract_id !== 'string' || body.contract_id.trim() === '') {\n  errors.push('contract_id is required');\n}\n\nconst validPriorities = ['P1-Critical', 'P2-High', 'P3-Medium', 'P4-Low'];\nif (!body.priority_level) {\n  errors.push('priority_level is required');\n} else if (!validPriorities.includes(body.priority_level)) {\n  errors.push(`priority_level must be one of: ${validPriorities.join(', ')}`);\n}\n\nreturn [{\n  json: {\n    valid: errors.length === 0,\n    errors,\n    body\n  }\n}];"
+      },
+      "id": "node-validate-sla",
+      "name": "Validate SLA Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-sla-valid",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-if-sla-valid",
+      "name": "Validation OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        448,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: false, error: \"Validation failed\", details: $json.errors }) }}",
+        "options": {}
+      },
+      "id": "node-respond-400-sla",
+      "name": "Respond 400 Validation Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        672,
+        512
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "search",
+        "base": {
+          "__rl": true,
+          "value": "={{ $env.AIRTABLE_BASE_ID || 'app65IDx6BQUgSYE7' }}",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "Contracts",
+          "mode": "name"
+        },
+        "filterByFormula": "={Contract ID}=\"{{ $json.body.contract_id }}\"",
+        "options": {
+          "fields": [
+            "Contract ID",
+            "Organization"
+          ]
+        }
+      },
+      "id": "node-find-contract-sla",
+      "name": "Airtable - Find Contract",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        672,
+        208
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "fLB4Nn2Sf0mSKD8w",
+          "name": "Airtable Personal Access Token account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "cond-contract-found",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "isNotEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-if-contract-found",
+      "name": "Contract Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        880,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: false, error: \"Contract not found\", contract_id: $('Validate SLA Input').first().json.body.contract_id }) }}",
+        "options": {}
+      },
+      "id": "node-respond-404-sla",
+      "name": "Respond 404 Not Found",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1104,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "value": "={{ $env.AIRTABLE_BASE_ID || 'app65IDx6BQUgSYE7' }}",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "SLA Priorities",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Description": "={{ $('Validate SLA Input').first().json.body.description || '' }}",
+            "Response Time": "={{ $('Validate SLA Input').first().json.body.response_time || '' }}",
+            "Resolution Time": "={{ $('Validate SLA Input').first().json.body.resolution_time || '' }}",
+            "Mitigation Time": "={{ $('Validate SLA Input').first().json.body.mitigation_time || '' }}",
+            "Availability Target": "={{ $('Validate SLA Input').first().json.body.availability_target || '' }}",
+            "Measurement Period": "={{ $('Validate SLA Input').first().json.body.measurement_period || '' }}",
+            "Trigger Conditions": "={{ $('Validate SLA Input').first().json.body.trigger_conditions || '' }}",
+            "Clause Reference": "={{ $('Validate SLA Input').first().json.body.clause_reference || '' }}",
+            "Source": "Manual Entry",
+            "Contract": "={{ [$('Airtable - Find Contract').first().json.id] }}",
+            "Priority": "={{ $('Validate SLA Input').first().json.body.priority_level }}",
+            "Penalties": "={{ $('Validate SLA Input').first().json.body.penalties_credits || '' }}",
+            "Organisation": "={{ [$json.id] }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "node-create-sla",
+      "name": "Airtable - Create SLA Priority",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        1328,
+        112
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "fLB4Nn2Sf0mSKD8w",
+          "name": "Airtable Personal Access Token account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: true, message: \"SLA priority created\", record_id: $json.id, priority: $('Validate SLA Input').first().json.body.priority, contract_id: $('Validate SLA Input').first().json.body.contract_id, source: \"Manual Entry\" }) }}",
+        "options": {}
+      },
+      "id": "node-respond-201-sla",
+      "name": "Respond 201 Created",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1552,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "manual-concern-entry",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "node-webhook-concern",
+      "name": "Webhook - Manual Concern",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        800
+      ],
+      "webhookId": "manual-concern-entry"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\nconst errors = [];\n\nif (!body.org_name || typeof body.org_name !== 'string' || body.org_name.trim() === '') {\n  errors.push('org_name is required');\n}\nif (!body.contract_id || typeof body.contract_id !== 'string' || body.contract_id.trim() === '') {\n  errors.push('contract_id is required');\n}\nif (!body.title || typeof body.title !== 'string' || body.title.trim() === '') {\n  errors.push('title is required');\n}\n\nconst validRiskLevels = ['HIGH', 'MEDIUM', 'LOW'];\nif (!body.risk_level) {\n  errors.push('risk_level is required');\n} else if (!validRiskLevels.includes(body.risk_level.toUpperCase())) {\n  errors.push(`risk_level must be one of: ${validRiskLevels.join(', ')}`);\n}\n\nreturn [{\n  json: {\n    valid: errors.length === 0,\n    errors,\n    body: {\n      ...body,\n      risk_level: body.risk_level ? body.risk_level.toUpperCase() : body.risk_level\n    }\n  }\n}];"
+      },
+      "id": "node-validate-concern",
+      "name": "Validate Concern Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        800
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-concern-valid",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-if-concern-valid",
+      "name": "Concern Validation OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        448,
+        800
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: false, error: \"Validation failed\", details: $json.errors }) }}",
+        "options": {}
+      },
+      "id": "node-respond-400-concern",
+      "name": "Respond 400 Concern Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        672,
+        1008
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "search",
+        "base": {
+          "__rl": true,
+          "value": "={{ $env.AIRTABLE_BASE_ID || 'app65IDx6BQUgSYE7' }}",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "Contracts",
+          "mode": "name"
+        },
+        "filterByFormula": "={Contract ID}=\"{{ $json.body.contract_id }}\"",
+        "options": {
+          "fields": [
+            "Contract ID",
+            "Organization"
+          ]
+        }
+      },
+      "id": "node-find-contract-concern",
+      "name": "Airtable - Find Contract for Concern",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        672,
+        704
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "fLB4Nn2Sf0mSKD8w",
+          "name": "Airtable Personal Access Token account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "cond-concern-contract-found",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "isNotEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-if-concern-contract-found",
+      "name": "Concern Contract Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        880,
+        704
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: false, error: \"Contract not found\", contract_id: $('Validate Concern Input').first().json.body.contract_id }) }}",
+        "options": {}
+      },
+      "id": "node-respond-404-concern",
+      "name": "Respond 404 Concern Not Found",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1104,
+        912
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "value": "={{ $env.AIRTABLE_BASE_ID || 'app65IDx6BQUgSYE7' }}",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "Concerns and Risks",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Title": "={{ $('Validate Concern Input').first().json.body.title }}",
+            "Risk Level": "={{ $('Validate Concern Input').first().json.body.risk_level }}",
+            "Category": "={{ $('Validate Concern Input').first().json.body.category || '' }}",
+            "Clause Reference": "={{ $('Validate Concern Input').first().json.body.clause_reference || '' }}",
+            "Recommendation": "={{ $('Validate Concern Input').first().json.body.recommendation || '' }}",
+            "Status": "Open",
+            "Source": "Manual Entry",
+            "Contract": "={{ [$('Airtable - Find Contract for Concern').first().json.id] }}",
+            "Concern": "={{ $('Validate Concern Input').first().json.body.description || '' }}",
+            "Relevant Clause": "={{ $('Validate Concern Input').first().json.body.clause_reference || $('Validate Concern Input').first().json.body.relevant_clause || '' }}",
+            "Organisation": "={{ [$json.id] }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "node-create-concern",
+      "name": "Airtable - Create Concern",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        1328,
+        608
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "fLB4Nn2Sf0mSKD8w",
+          "name": "Airtable Personal Access Token account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: true, message: \"Concern created\", record_id: $json.id, title: $('Validate Concern Input').first().json.body.title, risk_level: $('Validate Concern Input').first().json.body.risk_level, status: \"Open\", contract_id: $('Validate Concern Input').first().json.body.contract_id, source: \"Manual Entry\" }) }}",
+        "options": {}
+      },
+      "id": "node-respond-201-concern",
+      "name": "Respond 201 Concern Created",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1552,
+        608
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "search",
+        "base": {
+          "__rl": true,
+          "value": "={{ $env.AIRTABLE_BASE_ID || 'app65IDx6BQUgSYE7' }}",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "Organisations",
+          "mode": "name"
+        },
+        "filterByFormula": "={Name}=\"{{ $('Validate SLA Input').first().json.body.org_name }}\"",
+        "options": {
+          "fields": [
+            "Name"
+          ]
+        }
+      },
+      "id": "node-find-org-sla",
+      "name": "Airtable - Find Org for SLA",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        1104,
+        -48
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "fLB4Nn2Sf0mSKD8w",
+          "name": "Airtable Personal Access Token account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "search",
+        "base": {
+          "__rl": true,
+          "value": "={{ $env.AIRTABLE_BASE_ID || 'app65IDx6BQUgSYE7' }}",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "Organisations",
+          "mode": "name"
+        },
+        "filterByFormula": "={Name}=\"{{ $('Validate Concern Input').first().json.body.org_name }}\"",
+        "options": {
+          "fields": [
+            "Name"
+          ]
+        }
+      },
+      "id": "node-find-org-concern",
+      "name": "Airtable - Find Org for Concern",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        1104,
+        576
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "fLB4Nn2Sf0mSKD8w",
+          "name": "Airtable Personal Access Token account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "manual-uptime-entry",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "node-webhook-uptime",
+      "name": "Webhook - Manual Uptime Entry",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        1312
+      ],
+      "webhookId": "manual-uptime-entry"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\nconst errors = [];\n\nif (!body.org_name || typeof body.org_name !== 'string' || body.org_name.trim() === '') {\n  errors.push('org_name is required');\n}\nif (!body.contract_id || typeof body.contract_id !== 'string' || body.contract_id.trim() === '') {\n  errors.push('contract_id is required');\n}\nif (!body.target_percentage && body.target_percentage !== 0) {\n  errors.push('target_percentage is required');\n}\nif (!body.measurement_window || typeof body.measurement_window !== 'string' || body.measurement_window.trim() === '') {\n  errors.push('measurement_window is required');\n}\n\nreturn [{\n  json: {\n    valid: errors.length === 0,\n    errors,\n    body\n  }\n}];"
+      },
+      "id": "node-validate-uptime",
+      "name": "Validate Uptime Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        1312
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-uptime-valid",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-if-uptime-valid",
+      "name": "Uptime Validation OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        448,
+        1312
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: false, error: \"Validation failed\", details: $json.errors }) }}",
+        "options": {}
+      },
+      "id": "node-respond-400-uptime",
+      "name": "Respond 400 Uptime Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        672,
+        1504
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "search",
+        "base": {
+          "__rl": true,
+          "value": "={{ $env.AIRTABLE_BASE_ID || 'app65IDx6BQUgSYE7' }}",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "Contracts",
+          "mode": "name"
+        },
+        "filterByFormula": "={Contract ID}=\"{{ $json.body.contract_id }}\"",
+        "options": {
+          "fields": [
+            "Contract ID",
+            "Organization"
+          ]
+        }
+      },
+      "id": "node-find-contract-uptime",
+      "name": "Airtable - Find Contract for Uptime",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        672,
+        1200
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "fLB4Nn2Sf0mSKD8w",
+          "name": "Airtable Personal Access Token account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "cond-uptime-contract-found",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "isNotEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-if-uptime-contract-found",
+      "name": "Uptime Contract Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        880,
+        1200
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: false, error: \"Contract not found\", contract_id: $('Validate Uptime Input').first().json.body.contract_id }) }}",
+        "options": {}
+      },
+      "id": "node-respond-404-uptime",
+      "name": "Respond 404 Uptime Not Found",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1104,
+        1408
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "search",
+        "base": {
+          "__rl": true,
+          "value": "={{ $env.AIRTABLE_BASE_ID || 'app65IDx6BQUgSYE7' }}",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "Organisations",
+          "mode": "name"
+        },
+        "filterByFormula": "={Name}=\"{{ $('Validate Uptime Input').first().json.body.org_name }}\"",
+        "options": {
+          "fields": [
+            "Name"
+          ]
+        }
+      },
+      "id": "node-find-org-uptime",
+      "name": "Airtable - Find Org for Uptime",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        1104,
+        1056
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "fLB4Nn2Sf0mSKD8w",
+          "name": "Airtable Personal Access Token account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "value": "={{ $env.AIRTABLE_BASE_ID || 'app65IDx6BQUgSYE7' }}",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "Uptime Commitments",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Contract": "={{ [$('Airtable - Find Contract for Uptime').first().json.id] }}",
+            "Organisation": "={{ [$json.id] }}",
+            "Target Percentage": "={{ $('Validate Uptime Input').first().json.body.target_percentage }}",
+            "Measurement Window": "={{ $('Validate Uptime Input').first().json.body.measurement_window }}",
+            "Exclusions": "={{ $('Validate Uptime Input').first().json.body.exclusions || '' }}",
+            "Calculation Method": "={{ $('Validate Uptime Input').first().json.body.calculation_method || '' }}",
+            "Clause Reference": "={{ $('Validate Uptime Input').first().json.body.clause_reference || '' }}",
+            "Source": "Manual Entry"
+          }
+        },
+        "options": {}
+      },
+      "id": "node-create-uptime",
+      "name": "Airtable - Create Uptime Commitment",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        1328,
+        1104
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "fLB4Nn2Sf0mSKD8w",
+          "name": "Airtable Personal Access Token account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: true, message: \"Uptime commitment created\", record_id: $json.id, target_percentage: $('Validate Uptime Input').first().json.body.target_percentage, contract_id: $('Validate Uptime Input').first().json.body.contract_id, source: \"Manual Entry\" }) }}",
+        "options": {}
+      },
+      "id": "node-respond-201-uptime",
+      "name": "Respond 201 Uptime Created",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1552,
+        1104
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "manual-service-credit-entry",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "node-webhook-credit",
+      "name": "Webhook - Manual Service Credit Entry",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        1904
+      ],
+      "webhookId": "manual-service-credit-entry"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\nconst errors = [];\n\nif (!body.org_name || typeof body.org_name !== 'string' || body.org_name.trim() === '') {\n  errors.push('org_name is required');\n}\nif (!body.contract_id || typeof body.contract_id !== 'string' || body.contract_id.trim() === '') {\n  errors.push('contract_id is required');\n}\nif (!body.trigger_condition || typeof body.trigger_condition !== 'string' || body.trigger_condition.trim() === '') {\n  errors.push('trigger_condition is required');\n}\nif (!body.credit_percentage && body.credit_percentage !== 0) {\n  errors.push('credit_percentage is required');\n}\n\nreturn [{\n  json: {\n    valid: errors.length === 0,\n    errors,\n    body\n  }\n}];"
+      },
+      "id": "node-validate-credit",
+      "name": "Validate Service Credit Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        1904
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-credit-valid",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-if-credit-valid",
+      "name": "Credit Validation OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        448,
+        1904
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: false, error: \"Validation failed\", details: $json.errors }) }}",
+        "options": {}
+      },
+      "id": "node-respond-400-credit",
+      "name": "Respond 400 Credit Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        672,
+        2112
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "search",
+        "base": {
+          "__rl": true,
+          "value": "={{ $env.AIRTABLE_BASE_ID || 'app65IDx6BQUgSYE7' }}",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "Contracts",
+          "mode": "name"
+        },
+        "filterByFormula": "={Contract ID}=\"{{ $json.body.contract_id }}\"",
+        "options": {
+          "fields": [
+            "Contract ID",
+            "Organization"
+          ]
+        }
+      },
+      "id": "node-find-contract-credit",
+      "name": "Airtable - Find Contract for Credit",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        672,
+        1808
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "fLB4Nn2Sf0mSKD8w",
+          "name": "Airtable Personal Access Token account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "cond-credit-contract-found",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "isNotEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-if-credit-contract-found",
+      "name": "Credit Contract Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        880,
+        1808
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: false, error: \"Contract not found\", contract_id: $('Validate Service Credit Input').first().json.body.contract_id }) }}",
+        "options": {}
+      },
+      "id": "node-respond-404-credit",
+      "name": "Respond 404 Credit Not Found",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1104,
+        2000
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "search",
+        "base": {
+          "__rl": true,
+          "value": "={{ $env.AIRTABLE_BASE_ID || 'app65IDx6BQUgSYE7' }}",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "Organisations",
+          "mode": "name"
+        },
+        "filterByFormula": "={Name}=\"{{ $('Validate Service Credit Input').first().json.body.org_name }}\"",
+        "options": {
+          "fields": [
+            "Name"
+          ]
+        }
+      },
+      "id": "node-find-org-credit",
+      "name": "Airtable - Find Org for Credit",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        1104,
+        1664
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "fLB4Nn2Sf0mSKD8w",
+          "name": "Airtable Personal Access Token account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "value": "={{ $env.AIRTABLE_BASE_ID || 'app65IDx6BQUgSYE7' }}",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "Service Credits",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Contract": "={{ [$('Airtable - Find Contract for Credit').first().json.id] }}",
+            "Organisation": "={{ [$json.id] }}",
+            "Trigger Condition": "={{ $('Validate Service Credit Input').first().json.body.trigger_condition }}",
+            "Credit Percentage": "={{ $('Validate Service Credit Input').first().json.body.credit_percentage }}",
+            "Cap": "={{ $('Validate Service Credit Input').first().json.body.cap || '' }}",
+            "Claim Process": "={{ $('Validate Service Credit Input').first().json.body.claim_process || '' }}",
+            "Claim Deadline": "={{ $('Validate Service Credit Input').first().json.body.claim_deadline || '' }}",
+            "Clause Reference": "={{ $('Validate Service Credit Input').first().json.body.clause_reference || '' }}",
+            "Source": "Manual Entry"
+          }
+        },
+        "options": {}
+      },
+      "id": "node-create-credit",
+      "name": "Airtable - Create Service Credit",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        1328,
+        1712
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "fLB4Nn2Sf0mSKD8w",
+          "name": "Airtable Personal Access Token account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: true, message: \"Service credit created\", record_id: $json.id, trigger_condition: $('Validate Service Credit Input').first().json.body.trigger_condition, contract_id: $('Validate Service Credit Input').first().json.body.contract_id, source: \"Manual Entry\" }) }}",
+        "options": {}
+      },
+      "id": "node-respond-201-credit",
+      "name": "Respond 201 Credit Created",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1552,
+        1712
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "manual-breach-entry",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "node-webhook-breach",
+      "name": "Webhook - Manual Breach Entry",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        2512
+      ],
+      "webhookId": "manual-breach-entry"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\nconst errors = [];\n\nif (!body.org_name || typeof body.org_name !== 'string' || body.org_name.trim() === '') {\n  errors.push('org_name is required');\n}\nif (!body.contract_id || typeof body.contract_id !== 'string' || body.contract_id.trim() === '') {\n  errors.push('contract_id is required');\n}\nif (!body.breach_type || typeof body.breach_type !== 'string' || body.breach_type.trim() === '') {\n  errors.push('breach_type is required');\n}\nif (!body.consequence || typeof body.consequence !== 'string' || body.consequence.trim() === '') {\n  errors.push('consequence is required');\n}\n\nreturn [{\n  json: {\n    valid: errors.length === 0,\n    errors,\n    body\n  }\n}];"
+      },
+      "id": "node-validate-breach",
+      "name": "Validate Breach Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        2512
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-breach-valid",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-if-breach-valid",
+      "name": "Breach Validation OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        448,
+        2512
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: false, error: \"Validation failed\", details: $json.errors }) }}",
+        "options": {}
+      },
+      "id": "node-respond-400-breach",
+      "name": "Respond 400 Breach Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        672,
+        2704
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "search",
+        "base": {
+          "__rl": true,
+          "value": "={{ $env.AIRTABLE_BASE_ID || 'app65IDx6BQUgSYE7' }}",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "Contracts",
+          "mode": "name"
+        },
+        "filterByFormula": "={Contract ID}=\"{{ $json.body.contract_id }}\"",
+        "options": {
+          "fields": [
+            "Contract ID",
+            "Organization"
+          ]
+        }
+      },
+      "id": "node-find-contract-breach",
+      "name": "Airtable - Find Contract for Breach",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        672,
+        2400
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "fLB4Nn2Sf0mSKD8w",
+          "name": "Airtable Personal Access Token account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "cond-breach-contract-found",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "isNotEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-if-breach-contract-found",
+      "name": "Breach Contract Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        880,
+        2400
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: false, error: \"Contract not found\", contract_id: $('Validate Breach Input').first().json.body.contract_id }) }}",
+        "options": {}
+      },
+      "id": "node-respond-404-breach",
+      "name": "Respond 404 Breach Not Found",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1104,
+        2608
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "search",
+        "base": {
+          "__rl": true,
+          "value": "={{ $env.AIRTABLE_BASE_ID || 'app65IDx6BQUgSYE7' }}",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "Organisations",
+          "mode": "name"
+        },
+        "filterByFormula": "={Name}=\"{{ $('Validate Breach Input').first().json.body.org_name }}\"",
+        "options": {
+          "fields": [
+            "Name"
+          ]
+        }
+      },
+      "id": "node-find-org-breach",
+      "name": "Airtable - Find Org for Breach",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        1104,
+        2256
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "fLB4Nn2Sf0mSKD8w",
+          "name": "Airtable Personal Access Token account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "value": "={{ $env.AIRTABLE_BASE_ID || 'app65IDx6BQUgSYE7' }}",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "Breach Clauses",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Contract": "={{ [$('Airtable - Find Contract for Breach').first().json.id] }}",
+            "Organisation": "={{ [$json.id] }}",
+            "Breach Type": "={{ $('Validate Breach Input').first().json.body.breach_type }}",
+            "Consequence": "={{ $('Validate Breach Input').first().json.body.consequence }}",
+            "Cure Period": "={{ $('Validate Breach Input').first().json.body.cure_period || '' }}",
+            "Clause Reference": "={{ $('Validate Breach Input').first().json.body.clause_reference || '' }}",
+            "Source": "Manual Entry"
+          }
+        },
+        "options": {}
+      },
+      "id": "node-create-breach",
+      "name": "Airtable - Create Breach Clause",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        1328,
+        2304
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "fLB4Nn2Sf0mSKD8w",
+          "name": "Airtable Personal Access Token account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: true, message: \"Breach clause created\", record_id: $json.id, breach_type: $('Validate Breach Input').first().json.body.breach_type, contract_id: $('Validate Breach Input').first().json.body.contract_id, source: \"Manual Entry\" }) }}",
+        "options": {}
+      },
+      "id": "node-respond-201-breach",
+      "name": "Respond 201 Breach Created",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1552,
+        2304
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook - Manual SLA Entry": {
+      "main": [
+        [
+          {
+            "node": "Validate SLA Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate SLA Input": {
+      "main": [
+        [
+          {
+            "node": "Validation OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validation OK?": {
+      "main": [
+        [
+          {
+            "node": "Airtable - Find Contract",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 400 Validation Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Airtable - Find Contract": {
+      "main": [
+        [
+          {
+            "node": "Contract Found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Contract Found?": {
+      "main": [
+        [
+          {
+            "node": "Airtable - Find Org for SLA",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 404 Not Found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Airtable - Create SLA Priority": {
+      "main": [
+        [
+          {
+            "node": "Respond 201 Created",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook - Manual Concern": {
+      "main": [
+        [
+          {
+            "node": "Validate Concern Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Concern Input": {
+      "main": [
+        [
+          {
+            "node": "Concern Validation OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Concern Validation OK?": {
+      "main": [
+        [
+          {
+            "node": "Airtable - Find Contract for Concern",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 400 Concern Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Airtable - Find Contract for Concern": {
+      "main": [
+        [
+          {
+            "node": "Concern Contract Found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Concern Contract Found?": {
+      "main": [
+        [
+          {
+            "node": "Airtable - Find Org for Concern",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 404 Concern Not Found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Airtable - Create Concern": {
+      "main": [
+        [
+          {
+            "node": "Respond 201 Concern Created",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Airtable - Find Org for SLA": {
+      "main": [
+        [
+          {
+            "node": "Airtable - Create SLA Priority",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Airtable - Find Org for Concern": {
+      "main": [
+        [
+          {
+            "node": "Airtable - Create Concern",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook - Manual Uptime Entry": {
+      "main": [
+        [
+          {
+            "node": "Validate Uptime Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Uptime Input": {
+      "main": [
+        [
+          {
+            "node": "Uptime Validation OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Uptime Validation OK?": {
+      "main": [
+        [
+          {
+            "node": "Airtable - Find Contract for Uptime",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 400 Uptime Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Airtable - Find Contract for Uptime": {
+      "main": [
+        [
+          {
+            "node": "Uptime Contract Found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Uptime Contract Found?": {
+      "main": [
+        [
+          {
+            "node": "Airtable - Find Org for Uptime",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 404 Uptime Not Found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Airtable - Find Org for Uptime": {
+      "main": [
+        [
+          {
+            "node": "Airtable - Create Uptime Commitment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Airtable - Create Uptime Commitment": {
+      "main": [
+        [
+          {
+            "node": "Respond 201 Uptime Created",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook - Manual Service Credit Entry": {
+      "main": [
+        [
+          {
+            "node": "Validate Service Credit Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Service Credit Input": {
+      "main": [
+        [
+          {
+            "node": "Credit Validation OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Credit Validation OK?": {
+      "main": [
+        [
+          {
+            "node": "Airtable - Find Contract for Credit",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 400 Credit Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Airtable - Find Contract for Credit": {
+      "main": [
+        [
+          {
+            "node": "Credit Contract Found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Credit Contract Found?": {
+      "main": [
+        [
+          {
+            "node": "Airtable - Find Org for Credit",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 404 Credit Not Found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Airtable - Find Org for Credit": {
+      "main": [
+        [
+          {
+            "node": "Airtable - Create Service Credit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Airtable - Create Service Credit": {
+      "main": [
+        [
+          {
+            "node": "Respond 201 Credit Created",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook - Manual Breach Entry": {
+      "main": [
+        [
+          {
+            "node": "Validate Breach Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Breach Input": {
+      "main": [
+        [
+          {
+            "node": "Breach Validation OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Breach Validation OK?": {
+      "main": [
+        [
+          {
+            "node": "Airtable - Find Contract for Breach",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 400 Breach Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Airtable - Find Contract for Breach": {
+      "main": [
+        [
+          {
+            "node": "Breach Contract Found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Breach Contract Found?": {
+      "main": [
+        [
+          {
+            "node": "Airtable - Find Org for Breach",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 404 Breach Not Found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Airtable - Find Org for Breach": {
+      "main": [
+        [
+          {
+            "node": "Airtable - Create Breach Clause",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Airtable - Create Breach Clause": {
+      "main": [
+        [
+          {
+            "node": "Respond 201 Breach Created",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "meta": {}
+}

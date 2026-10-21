@@ -1,0 +1,2475 @@
+{
+  "id": "HbhrNM5027jKKScc",
+  "name": "SLA Contract Manager — Agent Pipeline v2",
+  "active": false,
+  "tags": [
+    "Contract Processing",
+    "SLA Manager"
+  ],
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "SLA Contract Upload",
+        "formDescription": "Upload a contract file (PDF, DOCX, XLSX, CSV) to extract SLA data",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Organisation Name",
+              "placeholder": "e.g. Acme Corp",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Industry",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "Technology"
+                  },
+                  {
+                    "option": "Healthcare"
+                  },
+                  {
+                    "option": "Finance"
+                  },
+                  {
+                    "option": "Retail"
+                  },
+                  {
+                    "option": "Manufacturing"
+                  },
+                  {
+                    "option": "Government"
+                  },
+                  {
+                    "option": "Telecoms"
+                  },
+                  {
+                    "option": "Education"
+                  },
+                  {
+                    "option": "Other"
+                  }
+                ]
+              },
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Contract File",
+              "fieldType": "file",
+              "acceptFileTypes": ".pdf,.docx,.xlsx,.csv",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "0fa6534b-8250-48f2-b268-fcc12387583f",
+      "name": "Upload Form",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [
+        6176,
+        1408
+      ],
+      "webhookId": "sla-upload-form"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Capture form metadata and pass binary through\nconst item = $input.first();\nconst formData = item.json;\nconst binary = item.binary || {};\nconst binaryKey = Object.keys(binary)[0] || 'Contract_File';\nconst file = binary[binaryKey] || {};\n\nreturn [{\n  json: {\n    organisationName: formData['Organisation Name'] || 'Unknown',\n    organisationIndustry: formData['Industry'] || 'Other',\n    fileName: file.fileName || 'unknown',\n    mimeType: file.mimeType || '',\n    binaryKey: binaryKey\n  },\n  binary: item.binary\n}];"
+      },
+      "id": "fb061101-4c69-4fba-80fa-8fbad4964708",
+      "name": "Set Metadata",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        6416,
+        1408
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "binaryToPropery",
+        "binaryPropertyName": "Contract_File",
+        "options": {}
+      },
+      "id": "2a479475-6947-48f8-b9c5-4c9cb8b67ebe",
+      "name": "Extract Text from File",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        6656,
+        1408
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first();\nconst metadata = $('Set Metadata').first().json;\nconst base64Data = item.json.data;\n\nif (!base64Data || base64Data.length < 100) {\n  return [{ json: {\n    error: true,\n    message: 'No base64 data extracted from file',\n    organisationName: metadata.organisationName,\n    fileName: metadata.fileName\n  }}];\n}\n\nreturn [{ json: {\n  base64Data: base64Data,\n  organisationName: metadata.organisationName,\n  organisationIndustry: metadata.organisationIndustry,\n  fileName: metadata.fileName\n}}];"
+      },
+      "id": "a0d8d951-f62b-436c-9d97-fd19a66517be",
+      "name": "Normalise Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        6896,
+        1408
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.error === true }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "678713e8-41e8-4d87-969b-54113ee90f5a",
+      "name": "Text OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        7456,
+        960
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first();\nreturn [{ json: {\n  success: false,\n  error: item.json.message || 'Text extraction failed',\n  organisationName: item.json.organisationName,\n  fileName: item.json.fileName\n}}];"
+      },
+      "id": "b09f988e-4b63-4885-be84-04a7f5197f9a",
+      "name": "Extraction Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        7696,
+        848
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first();\nconst metadata = $('Build Request').first().json;\n\nlet parsed;\ntry {\n  let text = item.json.choices?.[0]?.message?.content || item.json.output || '';\n  if (typeof text === 'object') text = JSON.stringify(text);\n  \n  text = text.replace(/```json\\s*/g, '').replace(/```\\s*/g, '').trim();\n  \n  const jsonStart = text.indexOf('{');\n  const jsonEnd = text.lastIndexOf('}');\n  if (jsonStart !== -1 && jsonEnd !== -1) {\n    text = text.substring(jsonStart, jsonEnd + 1);\n  }\n  \n  parsed = JSON.parse(text);\n} catch (e) {\n  return [{ json: {\n    error: true,\n    parseError: 'Failed to parse AI response as JSON: ' + e.message,\n    rawOutput: String(item.json.choices?.[0]?.message?.content || item.json.output || '').substring(0, 500),\n    organisationName: metadata.organisationName,\n    fileName: metadata.fileName\n  }}];\n}\n\nlet notSpecifiedCount = 0;\nconst countNS = (obj) => {\n  if (typeof obj === 'string' && obj.toUpperCase().includes('NOT SPECIFIED')) notSpecifiedCount++;\n  else if (Array.isArray(obj)) obj.forEach(i => countNS(i));\n  else if (typeof obj === 'object' && obj !== null) Object.values(obj).forEach(v => countNS(v));\n};\ncountNS(parsed);\n\nreturn [{ json: {\n  ...parsed,\n  _notSpecifiedCount: notSpecifiedCount,\n  _organisationName: metadata.organisationName,\n  _organisationIndustry: metadata.organisationIndustry,\n  _fileName: metadata.fileName,\n  _processedAt: new Date().toISOString()\n}}];"
+      },
+      "id": "67d22e48-b677-406a-8cff-448bbc0403ba",
+      "name": "Parse Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        7584,
+        1408
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.error === true }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "d178b27f-a6bd-463d-b47f-4b22adafd9e4",
+      "name": "Parse OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        7824,
+        1408
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first();\nreturn [{ json: {\n  success: false,\n  error: item.json.parseError || 'Unknown error',\n  rawOutput: item.json.rawOutput || '',\n  organisationName: item.json.organisationName || item.json._organisationName,\n  fileName: item.json.fileName || item.json._fileName\n}}];"
+      },
+      "id": "1e507bdc-c34b-4f32-af3b-207c18670553",
+      "name": "Parse Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        8064,
+        1312
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "search",
+        "base": {
+          "__rl": true,
+          "value": "app65IDx6BQUgSYE7",
+          "mode": "list",
+          "cachedResultName": "SLA Contract Manager",
+          "cachedResultUrl": "https://airtable.com/app65IDx6BQUgSYE7"
+        },
+        "table": {
+          "__rl": true,
+          "value": "tbleD2POQ0LgSftMX",
+          "mode": "list",
+          "cachedResultName": "Organisations",
+          "cachedResultUrl": "https://airtable.com/app65IDx6BQUgSYE7/tbleD2POQ0LgSftMX"
+        },
+        "filterByFormula": "=({Name} = '{{ $json._organisationName }}')",
+        "options": {}
+      },
+      "id": "6464aa32-221f-4a4d-a25f-b0dbcdd2553e",
+      "name": "Search Org",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [
+        8064,
+        1504
+      ],
+      "alwaysOutputData": true,
+      "notes": "CONFIGURE: Select your Base and 'Organisations' table",
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "ZhnOAGISD8QGQAl2",
+          "name": "Airtable Personal Access Token account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst data = $('Parse Response').first().json;\n\nif (items.length > 0 && items[0].json.id) {\n  return [{ json: { orgRecordId: items[0].json.id, orgExists: true, ...data } }];\n} else {\n  return [{ json: { orgRecordId: null, orgExists: false, ...data } }];\n}"
+      },
+      "id": "ba996f21-0e4e-4c52-a139-8f74fba96bf2",
+      "name": "Check Org Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        8304,
+        1504
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.orgExists }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "e44a4e6e-42b8-4154-9ed5-3079e438b818",
+      "name": "Org Exists?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        8544,
+        1504
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: $input.first().json }];"
+      },
+      "id": "a084f4a9-5b34-4d52-81fb-dc8018ecf4c5",
+      "name": "Use Existing Org",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        8784,
+        1424
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "value": "app65IDx6BQUgSYE7",
+          "mode": "list",
+          "cachedResultName": "SLA Contract Manager",
+          "cachedResultUrl": "https://airtable.com/app65IDx6BQUgSYE7"
+        },
+        "table": {
+          "__rl": true,
+          "value": "tbleD2POQ0LgSftMX",
+          "mode": "list",
+          "cachedResultName": "Organisations",
+          "cachedResultUrl": "https://airtable.com/app65IDx6BQUgSYE7/tbleD2POQ0LgSftMX"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Name": "={{ $json._organisationName }}",
+            "Industry": "={{ $json._organisationIndustry }}",
+            "Notes": "Auto-created by SLA extraction pipeline"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Name",
+              "displayName": "Name",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Industry",
+              "displayName": "Industry",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "options",
+              "options": [
+                {
+                  "name": "Technology",
+                  "value": "Technology"
+                },
+                {
+                  "name": "Healthcare",
+                  "value": "Healthcare"
+                },
+                {
+                  "name": "Finance",
+                  "value": "Finance"
+                },
+                {
+                  "name": "Retail",
+                  "value": "Retail"
+                },
+                {
+                  "name": "Manufacturing",
+                  "value": "Manufacturing"
+                },
+                {
+                  "name": "Government",
+                  "value": "Government"
+                },
+                {
+                  "name": "Telecoms",
+                  "value": "Telecoms"
+                },
+                {
+                  "name": "Education",
+                  "value": "Education"
+                },
+                {
+                  "name": "Other",
+                  "value": "Other"
+                }
+              ],
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Created By",
+              "displayName": "Created By",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "Status",
+              "displayName": "Status",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "options",
+              "options": [
+                {
+                  "name": "Active",
+                  "value": "Active"
+                },
+                {
+                  "name": "Archived",
+                  "value": "Archived"
+                }
+              ],
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "Notes",
+              "displayName": "Notes",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Tenant ID",
+              "displayName": "Tenant ID",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "Contracts",
+              "displayName": "Contracts",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "array",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "Uptime Log",
+              "displayName": "Uptime Log",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "array",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "Incident Log",
+              "displayName": "Incident Log",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "array",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "Primary Contact",
+              "displayName": "Primary Contact",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "Email",
+              "displayName": "Email",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "SLA Priorities",
+              "displayName": "SLA Priorities",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "array",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "Uptime Commitments",
+              "displayName": "Uptime Commitments",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "array",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "Service Credits",
+              "displayName": "Service Credits",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "array",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "Concerns and Risks",
+              "displayName": "Concerns and Risks",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "array",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "Breach Clauses",
+              "displayName": "Breach Clauses",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "array",
+              "readOnly": false,
+              "removed": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "f1d83dd2-8fea-4386-b6ec-69807b126c29",
+      "name": "Create Organisation",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [
+        8784,
+        1600
+      ],
+      "notes": "CONFIGURE: Select 'Organisations' table",
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "ZhnOAGISD8QGQAl2",
+          "name": "Airtable Personal Access Token account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const newOrg = $input.first();\nconst data = $('Parse Response').first().json;\nreturn [{ json: { orgRecordId: newOrg.json.id, ...data } }];"
+      },
+      "id": "773885c2-af42-4615-ab34-8fbacfb4efbf",
+      "name": "Set New Org ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        9024,
+        1600
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "value": "app65IDx6BQUgSYE7",
+          "mode": "list",
+          "cachedResultName": "SLA Contract Manager",
+          "cachedResultUrl": "https://airtable.com/app65IDx6BQUgSYE7"
+        },
+        "table": {
+          "__rl": true,
+          "value": "tbl4vHxtrktR3lflU",
+          "mode": "list",
+          "cachedResultName": "Contracts",
+          "cachedResultUrl": "https://airtable.com/app65IDx6BQUgSYE7/tbl4vHxtrktR3lflU"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Auto Renewal": "={{ $json.contract_metadata.auto_renewal === 'NOT SPECIFIED' ? false : $json.contract_metadata.auto_renewal.toLowerCase().includes('yes') }}",
+            "Contract Title": "={{ $json.contract_metadata.contract_title }}",
+            "Service Provider": "={{ $json.contract_metadata.service_provider }}",
+            "Service Consumer": "={{ $json.contract_metadata.service_consumer }}",
+            "Contract Reference": "={{ $json.contract_metadata.contract_reference }}",
+            "Effective Date": "={{ $json.contract_metadata.effective_date === 'NOT SPECIFIED' ? null : $json.contract_metadata.effective_date }}",
+            "Expiry Date": "={{ $json.contract_metadata.expiry_date === 'NOT SPECIFIED' ? null : $json.contract_metadata.expiry_date }}",
+            "Review Date": "={{ $json.contract_metadata.review_date === 'NOT SPECIFIED' ? null : $json.contract_metadata.review_date }}",
+            "Notice Period Days": "={{ $json.contract_metadata.notice_period_days === 'NOT SPECIFIED' ? null : Number($json.contract_metadata.notice_period_days) }}",
+            "Governing Law": "={{ $json.contract_metadata.governing_law }}",
+            "Industry": "={{ $json._organisationIndustry }}",
+            "Status": "=Active",
+            "Extraction Notes": "={{ $json.extraction_confidence.notes }}",
+            "Organisation": "={{ [$json.orgRecordId] }}",
+            "Fields Not Found": "={{ JSON.stringify($json.extraction_confidence.fields_marked_not_specified) }}",
+            "Fields Needing Review": "={{ JSON.stringify($json.extraction_confidence.fields_requiring_review) }}",
+            "Source": "=Extracted",
+            "Extraction Confidence": "={{ $json.extraction_confidence.overall_confidence }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Contract Title",
+              "displayName": "Contract Title",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Service Provider",
+              "displayName": "Service Provider",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Service Consumer",
+              "displayName": "Service Consumer",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Effective Date",
+              "displayName": "Effective Date",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "dateTime",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Expiry Date",
+              "displayName": "Expiry Date",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "dateTime",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Auto Renewal",
+              "displayName": "Auto Renewal",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "boolean",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Notice Period Days",
+              "displayName": "Notice Period Days",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Governing Law",
+              "displayName": "Governing Law",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Contract Reference",
+              "displayName": "Contract Reference",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Source File URL",
+              "displayName": "Source File URL",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "Extraction Confidence",
+              "displayName": "Extraction Confidence",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "options",
+              "options": [
+                {
+                  "name": "HIGH",
+                  "value": "HIGH"
+                },
+                {
+                  "name": "MEDIUM",
+                  "value": "MEDIUM"
+                },
+                {
+                  "name": "LOW",
+                  "value": "LOW"
+                }
+              ],
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Fields Not Found",
+              "displayName": "Fields Not Found",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Fields Needing Review",
+              "displayName": "Fields Needing Review",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Extraction Date",
+              "displayName": "Extraction Date",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "dateTime",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "Model Used",
+              "displayName": "Model Used",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "Tenant ID",
+              "displayName": "Tenant ID",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "Organisation",
+              "displayName": "Organisation",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "array",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "SLA Priorities",
+              "displayName": "SLA Priorities",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "array",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "Uptime Commitments",
+              "displayName": "Uptime Commitments",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "array",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "Service Credits",
+              "displayName": "Service Credits",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "array",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "Concerns and Risks",
+              "displayName": "Concerns and Risks",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "array",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "Breach Clauses",
+              "displayName": "Breach Clauses",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "array",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "Incident Log",
+              "displayName": "Incident Log",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "array",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "Review Date",
+              "displayName": "Review Date",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "dateTime",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Status",
+              "displayName": "Status",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "options",
+              "options": [
+                {
+                  "name": "Active",
+                  "value": "Active"
+                },
+                {
+                  "name": "Expiring Soon",
+                  "value": "Expiring Soon"
+                },
+                {
+                  "name": "Expired",
+                  "value": "Expired"
+                },
+                {
+                  "name": "Under Review",
+                  "value": "Under Review"
+                }
+              ],
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Extraction Notes",
+              "displayName": "Extraction Notes",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Source",
+              "displayName": "Source",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "options",
+              "options": [
+                {
+                  "name": "Extracted",
+                  "value": "Extracted"
+                },
+                {
+                  "name": "Manual Entry",
+                  "value": "Manual Entry"
+                }
+              ],
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Industry",
+              "displayName": "Industry",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "options",
+              "options": [
+                {
+                  "name": "Technology",
+                  "value": "Technology"
+                },
+                {
+                  "name": "Healthcare",
+                  "value": "Healthcare"
+                },
+                {
+                  "name": "Finance",
+                  "value": "Finance"
+                },
+                {
+                  "name": "Retail",
+                  "value": "Retail"
+                },
+                {
+                  "name": "Manufacturing",
+                  "value": "Manufacturing"
+                },
+                {
+                  "name": "Government",
+                  "value": "Government"
+                },
+                {
+                  "name": "Telecoms",
+                  "value": "Telecoms"
+                },
+                {
+                  "name": "Education",
+                  "value": "Education"
+                },
+                {
+                  "name": "Other",
+                  "value": "Other"
+                }
+              ],
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Uptime Log",
+              "displayName": "Uptime Log",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "array",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "Attachments",
+              "displayName": "Attachments",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "array",
+              "readOnly": false,
+              "removed": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "aa338cfe-e79d-458a-90e1-d74db62719c9",
+      "name": "Create Contract",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [
+        9264,
+        1504
+      ],
+      "notes": "CONFIGURE: Select 'Contracts' table",
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "ZhnOAGISD8QGQAl2",
+          "name": "Airtable Personal Access Token account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const contractId = $input.first().json.id;\nconst data = $('Parse Response').first().json;\nconst allRecords = [];\n\n(data.sla_table || []).forEach(sla => {\n  allRecords.push({\n    _type: 'sla_priority',\n    _contractId: contractId,\n    Priority: sla.priority || 'NOT SPECIFIED',\n    Description: sla.description || 'NOT SPECIFIED',\n    'Response Time': sla.response_time || 'NOT SPECIFIED',\n    'Resolution Time': sla.resolution_time || 'NOT SPECIFIED',\n    'Mitigation Time': sla.mitigation_time || 'NOT SPECIFIED',\n    'Availability Target': sla.availability_target || 'NOT SPECIFIED',\n    'Measurement Period': sla.measurement_period || 'NOT SPECIFIED',\n    'Trigger Conditions': sla.conditions_triggering_this_priority || 'NOT SPECIFIED',\n    'Clause Reference': sla.exact_contract_clause_reference || 'NOT SPECIFIED',\n    Penalties: sla.penalties_or_credits || 'NOT SPECIFIED',\n    Source: 'Extracted'\n  });\n});\n\nconst uptimeArr = Array.isArray(data.uptime_commitments) ? data.uptime_commitments : [data.uptime_commitments];\nuptimeArr.filter(Boolean).forEach(u => {\n  allRecords.push({\n    _type: 'uptime_commitment',\n    _contractId: contractId,\n    'Target Percentage': u.target_percentage || 'NOT SPECIFIED',\n    'Measurement Window': u.measurement_window || 'NOT SPECIFIED',\n    Exclusions: u.exclusions || 'NOT SPECIFIED',\n    'Calculation Method': u.calculation_method || 'NOT SPECIFIED',\n    'Clause Reference': u.exact_clause_reference || 'NOT SPECIFIED',\n    Source: 'Extracted'\n  });\n});\n\n(data.service_credits || []).forEach(sc => {\n  allRecords.push({\n    _type: 'service_credit',\n    _contractId: contractId,\n    'Trigger Condition': sc.trigger_condition || 'NOT SPECIFIED',\n    'Credit Percentage': sc.credit_percentage || 'NOT SPECIFIED',\n    Cap: sc.cap_on_credits || 'NOT SPECIFIED',\n    'Claim Process': sc.claim_process || 'NOT SPECIFIED',\n    'Claim Deadline': sc.claim_deadline || 'NOT SPECIFIED',\n    'Clause Reference': sc.exact_clause_reference || 'NOT SPECIFIED',\n    Source: 'Extracted'\n  });\n});\n\n(data.concerns_for_service_provider || []).forEach(c => {\n  allRecords.push({\n    _type: 'concern',\n    _contractId: contractId,\n    Concern: c.concern || 'NOT SPECIFIED',\n    'Relevant Clause': c.relevant_clause || 'NOT SPECIFIED',\n    'Risk Level': c.risk_level || 'MEDIUM',\n    Recommendation: c.recommendation || 'NOT SPECIFIED',\n    Status: 'Open',\n    Source: 'Extracted'\n  });\n});\n\n(data.breach_clauses || []).forEach(b => {\n  allRecords.push({\n    _type: 'breach_clause',\n    _contractId: contractId,\n    'Breach Type': b.breach_type || 'NOT SPECIFIED',\n    Consequence: b.consequence || 'NOT SPECIFIED',\n    'Cure Period': b.cure_period || 'NOT SPECIFIED',\n    'Clause Reference': b.exact_clause_reference || 'NOT SPECIFIED',\n    Source: 'Extracted'\n  });\n});\n\nreturn allRecords.map(r => ({ json: r }));"
+      },
+      "id": "3589ca4b-bae5-49ee-aa83-e44bbc64b8b8",
+      "name": "Prepare Child Records",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        9504,
+        1504
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json._type }}",
+              "value2": "sla_priority"
+            }
+          ]
+        }
+      },
+      "id": "936b745a-9498-4149-953c-654999efd02f",
+      "name": "Is SLA?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        9744,
+        1504
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "value": "app65IDx6BQUgSYE7",
+          "mode": "list",
+          "cachedResultName": "SLA Contract Manager",
+          "cachedResultUrl": "https://airtable.com/app65IDx6BQUgSYE7"
+        },
+        "table": {
+          "__rl": true,
+          "value": "tblREyB9OuRljvaH5",
+          "mode": "list",
+          "cachedResultName": "SLA Priorities",
+          "cachedResultUrl": "https://airtable.com/app65IDx6BQUgSYE7/tblREyB9OuRljvaH5"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Priority Level": "={{ $json.Priority === 'NOT SPECIFIED' ? null : $json.Priority.includes('P1') ? 'P1-Critical' : $json.Priority.includes('P2') ? 'P2-High' : $json.Priority.includes('P3') ? 'P3-Medium' : $json.Priority.includes('P4') ? 'P4-Low' : null }}",
+            "SLA Name": "={{ $json.Name }}",
+            "Description": "={{ $json.Description }}",
+            "Response Time": "={{ $json['Response Time'] }}",
+            "Resolution Time": "={{ $json['Resolution Time'] }}",
+            "Mitigation Time": "={{ $json['Mitigation Time'] }}",
+            "Availability Target": "={{ $json['Availability Target'] }}",
+            "Measurement Period": "={{ $json['Measurement Period'] }}",
+            "Trigger Conditions": "={{ $json['Trigger Conditions'] }}",
+            "Clause Reference": "={{ $json['Clause Reference'] }}",
+            "Penalties Credits": "={{ $json.Penalties }}",
+            "Source": "={{ $json.Source }}",
+            "Contract": "={{ [$json._contractId] }}",
+            "Organisation": "={{ [$json._orgRecordId] }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "SLA Name",
+              "displayName": "SLA Name",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Priority Level",
+              "displayName": "Priority Level",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "options",
+              "options": [
+                {
+                  "name": "P1-Critical",
+                  "value": "P1-Critical"
+                },
+                {
+                  "name": "P2-High",
+                  "value": "P2-High"
+                },
+                {
+                  "name": "P3-Medium",
+                  "value": "P3-Medium"
+                },
+                {
+                  "name": "P4-Low",
+                  "value": "P4-Low"
+                }
+              ],
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Description",
+              "displayName": "Description",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Response Time",
+              "displayName": "Response Time",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Resolution Time",
+              "displayName": "Resolution Time",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Mitigation Time",
+              "displayName": "Mitigation Time",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Availability Target",
+              "displayName": "Availability Target",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Measurement Period",
+              "displayName": "Measurement Period",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Trigger Conditions",
+              "displayName": "Trigger Conditions",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Clause Reference",
+              "displayName": "Clause Reference",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Penalties Credits",
+              "displayName": "Penalties Credits",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Source",
+              "displayName": "Source",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "options",
+              "options": [
+                {
+                  "name": "Extracted",
+                  "value": "Extracted"
+                },
+                {
+                  "name": "Manual Entry",
+                  "value": "Manual Entry"
+                }
+              ],
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Contract",
+              "displayName": "Contract",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "array",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Organisation",
+              "displayName": "Organisation",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "array",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "b722bc7b-9e5e-4fe6-905f-197a35ebeaba",
+      "name": "Write SLA Priorities",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [
+        9984,
+        1408
+      ],
+      "notes": "CONFIGURE: Select 'SLA Priorities' table",
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "ZhnOAGISD8QGQAl2",
+          "name": "Airtable Personal Access Token account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json._type }}",
+              "value2": "uptime_commitment"
+            }
+          ]
+        }
+      },
+      "id": "7447d260-17d7-4887-897e-1b5980d89e2d",
+      "name": "Is Uptime?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        9984,
+        1600
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "value": "app65IDx6BQUgSYE7",
+          "mode": "list",
+          "cachedResultName": "SLA Contract Manager",
+          "cachedResultUrl": "https://airtable.com/app65IDx6BQUgSYE7"
+        },
+        "table": {
+          "__rl": true,
+          "value": "tbl0j94JYvnNsdsnH",
+          "mode": "list",
+          "cachedResultName": "Uptime Commitments",
+          "cachedResultUrl": "https://airtable.com/app65IDx6BQUgSYE7/tbl0j94JYvnNsdsnH"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Target Percentage": "={{ $json['Target Percentage'] }}",
+            "Measurement Window": "={{ $json['Measurement Window'] }}",
+            "Exclusions": "={{ $json.Exclusions }}",
+            "Calculation Method": "={{ $json['Calculation Method'] }}",
+            "Clause Reference": "={{ $json['Clause Reference'] }}",
+            "Contract": "={{ [$json._contractId] }}",
+            "Organisation": "={{ [$json._orgRecordId] }}",
+            "Source": "={{ $json.Source }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Target Percentage",
+              "displayName": "Target Percentage",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Measurement Window",
+              "displayName": "Measurement Window",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Exclusions",
+              "displayName": "Exclusions",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Calculation Method",
+              "displayName": "Calculation Method",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Clause Reference",
+              "displayName": "Clause Reference",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Contract",
+              "displayName": "Contract",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "array",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Organisation",
+              "displayName": "Organisation",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "array",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Source",
+              "displayName": "Source",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "options",
+              "options": [
+                {
+                  "name": "Extracted",
+                  "value": "Extracted"
+                },
+                {
+                  "name": "Manual Entry",
+                  "value": "Manual Entry"
+                }
+              ],
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "531350e9-dbe7-4c44-8a77-3eed745bd00d",
+      "name": "Write Uptime",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [
+        10224,
+        1520
+      ],
+      "notes": "CONFIGURE: Select 'Uptime Commitments' table",
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "ZhnOAGISD8QGQAl2",
+          "name": "Airtable Personal Access Token account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json._type }}",
+              "value2": "service_credit"
+            }
+          ]
+        }
+      },
+      "id": "77bcf47d-b06a-4209-a4cd-916140ef5740",
+      "name": "Is Credit?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        10224,
+        1712
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "value": "app65IDx6BQUgSYE7",
+          "mode": "list",
+          "cachedResultName": "SLA Contract Manager",
+          "cachedResultUrl": "https://airtable.com/app65IDx6BQUgSYE7"
+        },
+        "table": {
+          "__rl": true,
+          "value": "tblZhtVl69KgoD1WU",
+          "mode": "list",
+          "cachedResultName": "Service Credits",
+          "cachedResultUrl": "https://airtable.com/app65IDx6BQUgSYE7/tblZhtVl69KgoD1WU"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Credit Name": "={{ $json.Name }}",
+            "Trigger Condition": "={{ $json['Trigger Condition'] }}",
+            "Credit Percentage": "={{ $json['Credit Percentage'] }}",
+            "Credit Cap": "={{ $json.Cap }}",
+            "Claim Process": "={{ $json['Claim Process'] }}",
+            "Claim Deadline": "={{ $json['Claim Deadline'] }}",
+            "Clause Reference": "={{ $json['Clause Reference'] }}",
+            "Contract": "={{ [$json._contractId] }}",
+            "Organisation": "={{ [$json._orgRecordId] }}",
+            "Source": "={{ $json.Source }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Credit Name",
+              "displayName": "Credit Name",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Trigger Condition",
+              "displayName": "Trigger Condition",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Credit Percentage",
+              "displayName": "Credit Percentage",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Credit Cap",
+              "displayName": "Credit Cap",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Claim Process",
+              "displayName": "Claim Process",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Claim Deadline",
+              "displayName": "Claim Deadline",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Clause Reference",
+              "displayName": "Clause Reference",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Contract",
+              "displayName": "Contract",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "array",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Organisation",
+              "displayName": "Organisation",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "array",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Source",
+              "displayName": "Source",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "options",
+              "options": [
+                {
+                  "name": "Extracted",
+                  "value": "Extracted"
+                },
+                {
+                  "name": "Manual Entry",
+                  "value": "Manual Entry"
+                }
+              ],
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "f0770a7c-f962-413c-bab0-741e244a17ca",
+      "name": "Write Credits",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [
+        10464,
+        1632
+      ],
+      "notes": "CONFIGURE: Select 'Service Credits' table",
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "ZhnOAGISD8QGQAl2",
+          "name": "Airtable Personal Access Token account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json._type }}",
+              "value2": "concern"
+            }
+          ]
+        }
+      },
+      "id": "7f9a188d-1d20-4cb0-a2ef-39aef2dc686a",
+      "name": "Is Concern?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        10464,
+        1808
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "value": "app65IDx6BQUgSYE7",
+          "mode": "list",
+          "cachedResultName": "SLA Contract Manager",
+          "cachedResultUrl": "https://airtable.com/app65IDx6BQUgSYE7"
+        },
+        "table": {
+          "__rl": true,
+          "value": "tblYh2C1oT5CCKpl8",
+          "mode": "list",
+          "cachedResultName": "Concerns and Risks",
+          "cachedResultUrl": "https://airtable.com/app65IDx6BQUgSYE7/tblYh2C1oT5CCKpl8"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Concern": "={{ $json.Concern }}",
+            "Relevant Clause": "={{ $json['Relevant Clause'] }}",
+            "Risk Level": "={{ $json['Risk Level'].includes('HIGH') && !$json['Risk Level'].includes('/') ? 'HIGH' : $json['Risk Level'].includes('LOW') ? 'LOW' : 'MEDIUM' }}",
+            "Recommendation": "={{ $json.Recommendation }}",
+            "Status": "={{ $json.Status }}",
+            "Contract": "={{ [$json._contractId] }}",
+            "Organisation": "={{ [$json._orgRecordId] }}",
+            "Source": "={{ $json.Source }}",
+            "Concern Title": "={{ $json.Name }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Concern Title",
+              "displayName": "Concern Title",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Concern",
+              "displayName": "Concern",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Relevant Clause",
+              "displayName": "Relevant Clause",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Risk Level",
+              "displayName": "Risk Level",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "options",
+              "options": [
+                {
+                  "name": "HIGH",
+                  "value": "HIGH"
+                },
+                {
+                  "name": "MEDIUM",
+                  "value": "MEDIUM"
+                },
+                {
+                  "name": "LOW",
+                  "value": "LOW"
+                }
+              ],
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Recommendation",
+              "displayName": "Recommendation",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Status",
+              "displayName": "Status",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "options",
+              "options": [
+                {
+                  "name": "Open",
+                  "value": "Open"
+                },
+                {
+                  "name": "Acknowledged",
+                  "value": "Acknowledged"
+                },
+                {
+                  "name": "Mitigated",
+                  "value": "Mitigated"
+                }
+              ],
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Contract",
+              "displayName": "Contract",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "array",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Organisation",
+              "displayName": "Organisation",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "array",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Source",
+              "displayName": "Source",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "options",
+              "options": [
+                {
+                  "name": "Extracted",
+                  "value": "Extracted"
+                },
+                {
+                  "name": "Manual Entry",
+                  "value": "Manual Entry"
+                }
+              ],
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "096b8ccb-5fc0-4d53-9360-d57b50395006",
+      "name": "Write Concerns",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [
+        10704,
+        1728
+      ],
+      "notes": "CONFIGURE: Select 'Concerns & Risks' table",
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "ZhnOAGISD8QGQAl2",
+          "name": "Airtable Personal Access Token account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "value": "app65IDx6BQUgSYE7",
+          "mode": "list",
+          "cachedResultName": "SLA Contract Manager",
+          "cachedResultUrl": "https://airtable.com/app65IDx6BQUgSYE7"
+        },
+        "table": {
+          "__rl": true,
+          "value": "tbl6tOXyycTdGpINE",
+          "mode": "list",
+          "cachedResultName": "Breach Clauses",
+          "cachedResultUrl": "https://airtable.com/app65IDx6BQUgSYE7/tbl6tOXyycTdGpINE"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Breach Type": "={{ $json['Breach Type'] }}",
+            "Consequence": "={{ $json.Consequence }}",
+            "Cure Period": "={{ $json['Cure Period'] }}",
+            "Clause Reference": "={{ $json['Clause Reference'] }}",
+            "Contract": "={{ [$json._contractId] }}",
+            "Organisation": "={{ [$json._orgRecordId] }}",
+            "Source": "={{ $json.Source }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Breach Type",
+              "displayName": "Breach Type",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Consequence",
+              "displayName": "Consequence",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Cure Period",
+              "displayName": "Cure Period",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Clause Reference",
+              "displayName": "Clause Reference",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Contract",
+              "displayName": "Contract",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "array",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Organisation",
+              "displayName": "Organisation",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "array",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Source",
+              "displayName": "Source",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "options",
+              "options": [
+                {
+                  "name": "Extracted",
+                  "value": "Extracted"
+                },
+                {
+                  "name": "Manual Entry",
+                  "value": "Manual Entry"
+                }
+              ],
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "1c8ecd11-eda1-446f-978d-883f02d3296a",
+      "name": "Write Breach Clauses",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [
+        10704,
+        1904
+      ],
+      "notes": "CONFIGURE: Select 'Breach Clauses' table",
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "ZhnOAGISD8QGQAl2",
+          "name": "Airtable Personal Access Token account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const contractRecord = $('Create Contract').first();\nconst data = $('Parse Response').first().json;\n\nreturn [{ json: {\n  success: true,\n  contractRecordId: contractRecord.json.id,\n  organisationName: data._organisationName,\n  contractTitle: data.contract_metadata?.contract_title || 'Unknown',\n  extractionConfidence: data.extraction_confidence?.overall_confidence || 'UNKNOWN',\n  notSpecifiedCount: data._notSpecifiedCount || 0,\n  slaCount: (data.sla_table || []).length,\n  serviceCreditCount: (data.service_credits || []).length,\n  concernCount: (data.concerns_for_service_provider || []).length,\n  breachClauseCount: (data.breach_clauses || []).length,\n  processedAt: data._processedAt,\n  message: 'Successfully extracted and stored SLA data'\n}}];"
+      },
+      "id": "f20dbc8f-9472-4bd7-82a5-835aa6c59c01",
+      "name": "Success Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        10944,
+        1504
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\n\nconst requestBody = {\n  model: 'gpt-4o',\n  temperature: 0,\n  max_tokens: 8000,\n  messages: [\n    {\n      role: 'system',\n      content: 'You are a contract analysis specialist. Your ONLY job is to extract factual information from the contract document provided. You must NEVER invent, assume, or hallucinate any information.\\n\\nRULES:\\n1. If information is NOT explicitly stated in the contract, return \"NOT SPECIFIED\" for that field.\\n2. Extract exact wording where possible. Use direct quotes for conditions and terms.\\n3. If a clause is ambiguous, flag it as \"REQUIRES REVIEW\" and quote the exact ambiguous text.\\n4. Never fill in \"typical\" or \"industry standard\" values. Only extract what is written.\\n5. Respond with ONLY valid JSON. No markdown code fences. No preamble. No explanation.\\n\\nExtract into this exact JSON structure:\\n\\n{\"contract_metadata\":{\"contract_title\":\"\",\"effective_date\":\"\",\"expiry_date\":\"\",\"review_date\":\"\",\"auto_renewal\":\"\",\"notice_period_days\":\"\",\"governing_law\":\"\",\"service_provider\":\"\",\"service_consumer\":\"\",\"contract_reference\":\"\"},\"sla_table\":[{\"priority\":\"\",\"description\":\"\",\"response_time\":\"\",\"resolution_time\":\"\",\"mitigation_time\":\"\",\"availability_target\":\"\",\"measurement_period\":\"\",\"conditions_triggering_this_priority\":\"\",\"exact_contract_clause_reference\":\"\",\"penalties_or_credits\":\"\"}],\"uptime_commitments\":[{\"target_percentage\":\"\",\"measurement_window\":\"\",\"exclusions\":\"\",\"calculation_method\":\"\",\"exact_clause_reference\":\"\"}],\"service_credits\":[{\"trigger_condition\":\"\",\"credit_percentage\":\"\",\"cap_on_credits\":\"\",\"claim_process\":\"\",\"claim_deadline\":\"\",\"exact_clause_reference\":\"\"}],\"concerns_for_service_provider\":[{\"concern\":\"\",\"relevant_clause\":\"\",\"risk_level\":\"HIGH / MEDIUM / LOW\",\"recommendation\":\"\"}],\"breach_clauses\":[{\"breach_type\":\"\",\"consequence\":\"\",\"cure_period\":\"\",\"exact_clause_reference\":\"\"}],\"key_contacts\":{\"provider_contact\":\"\",\"consumer_contact\":\"\",\"escalation_path\":\"\"},\"extraction_confidence\":{\"overall_confidence\":\"HIGH / MEDIUM / LOW\",\"fields_marked_not_specified\":[],\"fields_requiring_review\":[],\"notes\":\"\"}}\\n\\nThe extraction_confidence section is mandatory. List every field you could NOT find.'\n    },\n    {\n      role: 'user',\n      content: [\n        {\n          type: 'file',\n          file: {\n            filename: item.fileName,\n            file_data: 'data:application/pdf;base64,' + item.base64Data\n          }\n        },\n        {\n          type: 'text',\n          text: 'Extract ALL SLA information from this contract. Organisation: ' + item.organisationName + '. Respond with ONLY the JSON object.'\n        }\n      ]\n    }\n  ]\n};\n\nreturn [{ json: { requestBody, organisationName: item.organisationName, organisationIndustry: item.organisationIndustry, fileName: item.fileName } }];"
+      },
+      "id": "7801c983-0be9-44fa-b0e8-8fe845b99b2b",
+      "name": "Build Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        7136,
+        1408
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.requestBody) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        7360,
+        1408
+      ],
+      "id": "e55d1dd4-fa7d-468c-8f89-4ea198bb37ea",
+      "name": "HTTP Request",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "emPx5996b5Kv5X4G",
+          "name": "Authorization"
+        },
+        "openAiApi": {
+          "id": "hi9jgbWx4TTKkRVO",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const contractId = $input.first().json.id;\nconst data = $('Parse Response').first().json;\nlet orgRecordId = null;\ntry { orgRecordId = $('Use Existing Org').first().json.orgRecordId; } catch(e) {}\nif (!orgRecordId) {\n  try { orgRecordId = $('Set New Org ID').first().json.orgRecordId; } catch(e) {}\n}\nif (!orgRecordId) {\n  try { orgRecordId = $('Create Organisation').first().json.id; } catch(e) {}\n}\nconst allRecords = [];\n\n(data.sla_table || []).forEach(sla => {\n  allRecords.push({\n    _type: 'sla_priority',\n    _contractId: contractId,\n    _orgRecordId: orgRecordId,\n    Name: (sla.priority || 'SLA') + ' - ' + (sla.description || '').substring(0, 50),\n    Priority: sla.priority || 'NOT SPECIFIED',\n    Description: sla.description || 'NOT SPECIFIED',\n    'Response Time': sla.response_time || 'NOT SPECIFIED',\n    'Resolution Time': sla.resolution_time || 'NOT SPECIFIED',\n    'Mitigation Time': sla.mitigation_time || 'NOT SPECIFIED',\n    'Availability Target': sla.availability_target || 'NOT SPECIFIED',\n    'Measurement Period': sla.measurement_period || 'NOT SPECIFIED',\n    'Trigger Conditions': sla.conditions_triggering_this_priority || 'NOT SPECIFIED',\n    'Clause Reference': sla.exact_contract_clause_reference || 'NOT SPECIFIED',\n    Penalties: sla.penalties_or_credits || 'NOT SPECIFIED',\n    Source: 'Extracted'\n  });\n});\n\nconst uptimeArr = Array.isArray(data.uptime_commitments) ? data.uptime_commitments : [data.uptime_commitments];\nuptimeArr.filter(Boolean).forEach((u, i) => {\n  allRecords.push({\n    _type: 'uptime_commitment',\n    _contractId: contractId,\n    _orgRecordId: orgRecordId,\n    Name: 'Uptime ' + (u.target_percentage || 'Commitment ' + (i + 1)),\n    'Target Percentage': u.target_percentage || 'NOT SPECIFIED',\n    'Measurement Window': u.measurement_window || 'NOT SPECIFIED',\n    Exclusions: u.exclusions || 'NOT SPECIFIED',\n    'Calculation Method': u.calculation_method || 'NOT SPECIFIED',\n    'Clause Reference': u.exact_clause_reference || 'NOT SPECIFIED',\n    Source: 'Extracted'\n  });\n});\n\n(data.service_credits || []).forEach((sc, i) => {\n  allRecords.push({\n    _type: 'service_credit',\n    _contractId: contractId,\n    _orgRecordId: orgRecordId,\n    Name: 'Credit ' + (sc.credit_percentage || 'Tier ' + (i + 1)),\n    'Trigger Condition': sc.trigger_condition || 'NOT SPECIFIED',\n    'Credit Percentage': sc.credit_percentage || 'NOT SPECIFIED',\n    Cap: sc.cap_on_credits || 'NOT SPECIFIED',\n    'Claim Process': sc.claim_process || 'NOT SPECIFIED',\n    'Claim Deadline': sc.claim_deadline || 'NOT SPECIFIED',\n    'Clause Reference': sc.exact_clause_reference || 'NOT SPECIFIED',\n    Source: 'Extracted'\n  });\n});\n\n(data.concerns_for_service_provider || []).forEach((c, i) => {\n  allRecords.push({\n    _type: 'concern',\n    _contractId: contractId,\n    _orgRecordId: orgRecordId,\n    Name: (c.risk_level || 'Risk') + ' - ' + (c.concern || '').substring(0, 50),\n    Concern: c.concern || 'NOT SPECIFIED',\n    'Relevant Clause': c.relevant_clause || 'NOT SPECIFIED',\n    'Risk Level': c.risk_level || 'MEDIUM',\n    Recommendation: c.recommendation || 'NOT SPECIFIED',\n    Status: 'Open',\n    Source: 'Extracted'\n  });\n});\n\n(data.breach_clauses || []).forEach((b, i) => {\n  allRecords.push({\n    _type: 'breach_clause',\n    _contractId: contractId,\n    _orgRecordId: orgRecordId,\n    Name: (b.breach_type || 'Breach ' + (i + 1)),\n    'Breach Type': b.breach_type || 'NOT SPECIFIED',\n    Consequence: b.consequence || 'NOT SPECIFIED',\n    'Cure Period': b.cure_period || 'NOT SPECIFIED',\n    'Clause Reference': b.exact_clause_reference || 'NOT SPECIFIED',\n    Source: 'Extracted'\n  });\n});\n\nreturn allRecords.map(r => ({ json: r }));"
+      },
+      "id": "b47b4c12-221d-4224-885b-1a7a4af9b0c0",
+      "name": "Prepare Child Records1",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        9536,
+        1712
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const XLSX = require('xlsx');\nconst data = $('Parse Response').first().json;\nconst meta = data.contract_metadata || {};\nconst wb = XLSX.utils.book_new();\n\n// Sheet 1: Contract Metadata\nconst metaRows = [\n  ['CONTRACT METADATA'],\n  ['Field', 'Value'],\n  ['Organisation', data._organisationName || ''],\n  ['Industry', data._organisationIndustry || ''],\n  ['Contract Title', meta.contract_title || 'NOT SPECIFIED'],\n  ['Contract Reference', meta.contract_reference || 'NOT SPECIFIED'],\n  ['Service Provider', meta.service_provider || 'NOT SPECIFIED'],\n  ['Service Consumer', meta.service_consumer || 'NOT SPECIFIED'],\n  ['Effective Date', meta.effective_date || 'NOT SPECIFIED'],\n  ['Expiry Date', meta.expiry_date || 'NOT SPECIFIED'],\n  ['Auto Renewal', meta.auto_renewal || 'NOT SPECIFIED'],\n  ['Notice Period (Days)', meta.notice_period_days || 'NOT SPECIFIED'],\n  ['Governing Law', meta.governing_law || 'NOT SPECIFIED'],\n  ['Extraction Date', new Date().toISOString().split('T')[0]],\n  ['Extraction Confidence', (data.extraction_confidence || {}).overall_confidence || 'UNKNOWN']\n];\nconst ws1 = XLSX.utils.aoa_to_sheet(metaRows);\nws1['!cols'] = [{wch: 25}, {wch: 60}];\nXLSX.utils.book_append_sheet(wb, ws1, 'Contract Metadata');\n\n// Sheet 2: SLA Priorities\nconst slaHeader = ['Priority', 'Description', 'Response Time', 'Resolution Time', 'Mitigation Time', 'Availability Target', 'Measurement Period', 'Trigger Conditions', 'Clause Reference', 'Penalties / Credits'];\nconst slaRows = [['SLA PRIORITY TABLE'], slaHeader];\n(data.sla_table || []).forEach(sla => {\n  slaRows.push([\n    sla.priority || '', sla.description || '', sla.response_time || '',\n    sla.resolution_time || '', sla.mitigation_time || '', sla.availability_target || '',\n    sla.measurement_period || '', sla.conditions_triggering_this_priority || '',\n    sla.exact_contract_clause_reference || '', sla.penalties_or_credits || ''\n  ]);\n});\nconst ws2 = XLSX.utils.aoa_to_sheet(slaRows);\nws2['!cols'] = [{wch:15},{wch:40},{wch:15},{wch:15},{wch:15},{wch:15},{wch:15},{wch:50},{wch:15},{wch:40}];\nXLSX.utils.book_append_sheet(wb, ws2, 'SLA Priorities');\n\n// Sheet 3: Uptime & Credits\nconst uptime = Array.isArray(data.uptime_commitments) ? data.uptime_commitments : [data.uptime_commitments];\nconst u = uptime.filter(Boolean)[0] || {};\nconst uptimeRows = [\n  ['UPTIME COMMITMENTS'],\n  ['Field', 'Details'],\n  ['Target Uptime %', u.target_percentage || 'NOT SPECIFIED'],\n  ['Measurement Window', u.measurement_window || 'NOT SPECIFIED'],\n  ['Exclusions', u.exclusions || 'NOT SPECIFIED'],\n  ['Calculation Method', u.calculation_method || 'NOT SPECIFIED'],\n  ['Clause Reference', u.exact_clause_reference || 'NOT SPECIFIED'],\n  [],\n  ['SERVICE CREDITS'],\n  ['Trigger Condition', 'Credit %', 'Credit Cap', 'Claim Process', 'Claim Deadline', 'Clause Ref']\n];\n(data.service_credits || []).forEach(sc => {\n  uptimeRows.push([\n    sc.trigger_condition || '', sc.credit_percentage || '', sc.cap_on_credits || '',\n    sc.claim_process || '', sc.claim_deadline || '', sc.exact_clause_reference || ''\n  ]);\n});\nconst ws3 = XLSX.utils.aoa_to_sheet(uptimeRows);\nws3['!cols'] = [{wch:35},{wch:20},{wch:20},{wch:40},{wch:25},{wch:15}];\nXLSX.utils.book_append_sheet(wb, ws3, 'Uptime & Credits');\n\n// Sheet 4: Concerns & Risks\nconst concernRows = [\n  ['CONCERNS FOR SERVICE PROVIDER / CONSUMER'],\n  ['Concern', 'Relevant Clause', 'Risk Level', 'Recommendation', 'Status']\n];\n(data.concerns_for_service_provider || []).forEach(c => {\n  concernRows.push([c.concern || '', c.relevant_clause || '', c.risk_level || '', c.recommendation || '', 'Open']);\n});\nconst ws4 = XLSX.utils.aoa_to_sheet(concernRows);\nws4['!cols'] = [{wch:50},{wch:15},{wch:12},{wch:50},{wch:12}];\nXLSX.utils.book_append_sheet(wb, ws4, 'Concerns & Risks');\n\n// Sheet 5: Breach Clauses\nconst breachRows = [\n  ['BREACH & TERMINATION CLAUSES'],\n  ['Breach Type', 'Consequence', 'Cure Period', 'Clause Reference']\n];\n(data.breach_clauses || []).forEach(b => {\n  breachRows.push([b.breach_type || '', b.consequence || '', b.cure_period || '', b.exact_clause_reference || '']);\n});\nconst ws5 = XLSX.utils.aoa_to_sheet(breachRows);\nws5['!cols'] = [{wch:40},{wch:50},{wch:25},{wch:15}];\nXLSX.utils.book_append_sheet(wb, ws5, 'Breach Clauses');\n\n// Sheet 6: Extraction Audit\nconst conf = data.extraction_confidence || {};\nconst auditRows = [\n  ['EXTRACTION CONFIDENCE REPORT'],\n  ['Overall Confidence', conf.overall_confidence || 'UNKNOWN'],\n  [],\n  ['FIELDS MARKED \"NOT SPECIFIED\"', 'Explanation']\n];\n(conf.fields_marked_not_specified || []).forEach(f => {\n  auditRows.push([typeof f === 'string' ? f : JSON.stringify(f), 'Not found in contract text']);\n});\nauditRows.push([], ['FIELDS REQUIRING HUMAN REVIEW', 'Reason']);\n(conf.fields_requiring_review || []).forEach(f => {\n  auditRows.push([typeof f === 'string' ? f : JSON.stringify(f), 'Requires human review']);\n});\nauditRows.push([], ['NOTES'], [conf.notes || 'AI extraction — verify against source document.']);\nconst ws6 = XLSX.utils.aoa_to_sheet(auditRows);\nws6['!cols'] = [{wch:40},{wch:60}];\nXLSX.utils.book_append_sheet(wb, ws6, 'Extraction Audit');\n\n// Generate binary\nconst buf = XLSX.write(wb, {type: 'buffer', bookType: 'xlsx'});\nconst base64 = buf.toString('base64');\nconst fileName = 'SLA_Extraction_' + (data._organisationName || 'Report').replace(/[^a-zA-Z0-9]/g, '_') + '.xlsx';\n\nreturn [{\n  json: { success: true, fileName: fileName },\n  binary: {\n    data: {\n      data: base64,\n      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',\n      fileName: fileName,\n      fileExtension: 'xlsx'\n    }\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        11248,
+        1504
+      ],
+      "id": "4be46d1a-2dd5-47f1-a0d6-cd2b472e03fc",
+      "name": "Generate Excel Report"
+    }
+  ],
+  "connections": {
+    "Upload Form": {
+      "main": [
+        [
+          {
+            "node": "Set Metadata",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Metadata": {
+      "main": [
+        [
+          {
+            "node": "Extract Text from File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Text from File": {
+      "main": [
+        [
+          {
+            "node": "Normalise Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalise Text": {
+      "main": [
+        [
+          {
+            "node": "Build Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Text OK?": {
+      "main": [
+        [
+          {
+            "node": "Extraction Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Parse Response": {
+      "main": [
+        [
+          {
+            "node": "Parse OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse OK?": {
+      "main": [
+        [
+          {
+            "node": "Parse Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Search Org",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Org": {
+      "main": [
+        [
+          {
+            "node": "Check Org Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Org Result": {
+      "main": [
+        [
+          {
+            "node": "Org Exists?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Org Exists?": {
+      "main": [
+        [
+          {
+            "node": "Use Existing Org",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create Organisation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Use Existing Org": {
+      "main": [
+        [
+          {
+            "node": "Create Contract",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Organisation": {
+      "main": [
+        [
+          {
+            "node": "Set New Org ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set New Org ID": {
+      "main": [
+        [
+          {
+            "node": "Create Contract",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Contract": {
+      "main": [
+        [
+          {
+            "node": "Prepare Child Records1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Child Records": {
+      "main": [
+        []
+      ]
+    },
+    "Is SLA?": {
+      "main": [
+        [
+          {
+            "node": "Write SLA Priorities",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Is Uptime?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write SLA Priorities": {
+      "main": [
+        [
+          {
+            "node": "Success Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Uptime?": {
+      "main": [
+        [
+          {
+            "node": "Write Uptime",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Is Credit?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write Uptime": {
+      "main": [
+        [
+          {
+            "node": "Success Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Credit?": {
+      "main": [
+        [
+          {
+            "node": "Write Credits",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Is Concern?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write Credits": {
+      "main": [
+        [
+          {
+            "node": "Success Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Concern?": {
+      "main": [
+        [
+          {
+            "node": "Write Concerns",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Write Breach Clauses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write Concerns": {
+      "main": [
+        [
+          {
+            "node": "Success Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write Breach Clauses": {
+      "main": [
+        [
+          {
+            "node": "Success Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Request": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Parse Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Child Records1": {
+      "main": [
+        [
+          {
+            "node": "Is SLA?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Success Response": {
+      "main": [
+        [
+          {
+            "node": "Generate Excel Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}

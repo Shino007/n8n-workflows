@@ -1,0 +1,3653 @@
+{
+  "id": "YX2AIpjcJr1mLdUW",
+  "name": "PromoMag Article Generator - Telegram + Scheduled v22",
+  "active": true,
+  "tags": [
+    "AI Writing",
+    "PromoMag",
+    "Telegram",
+    "WordPress"
+  ],
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "id": "4759551e-a5e3-4874-a758-46c1214d6caa",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -3344,
+        896
+      ],
+      "webhookId": "promomag-telegram-webhook-v13",
+      "credentials": {
+        "telegramApi": {
+          "id": "F7kV4EHRCT4GkYho",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Explicit conversation state machine. The stage is authoritative and the message is\n// interpreted in light of it, rather than the stage being guessed from keywords alone.\n// Stages: IDLE -> AWAITING_TOPIC -> AWAITING_DIRECTION -> ARTICLE_READY\nconst raw = $input.item.json.message?.text || '';\nconst text = raw.toLowerCase().trim();\nconst chatId = $input.item.json.message.chat.id;\nconst sd = $getWorkflowStaticData('global');\nconst key = 'session_' + chatId;\nconst s = sd[key] || { stage: 'IDLE' };\nif (!s.stage) s.stage = 'IDLE';\n\nconst CATS = {\n  business:      { label:'Business',      slug:'business-finance',   wpId:2,    query:'business OR finance news' },\n  finance:       { label:'Business',      slug:'business-finance',   wpId:2,    query:'business OR finance news' },\n  entertainment: { label:'Entertainment', slug:'entertainment-arts', wpId:105,  query:'entertainment OR arts OR culture news' },\n  arts:          { label:'Entertainment', slug:'entertainment-arts', wpId:105,  query:'entertainment OR arts OR culture news' },\n  environment:   { label:'Environment',   slug:'environment-nature', wpId:162,  query:'environment OR nature OR climate news' },\n  nature:        { label:'Environment',   slug:'environment-nature', wpId:162,  query:'environment OR nature OR climate news' },\n  science:       { label:'Science',       slug:'science-technology', wpId:296,  query:'science OR technology OR AI news' },\n  technology:    { label:'Science',       slug:'science-technology', wpId:296,  query:'science OR technology OR AI news' },\n  politics:      { label:'Politics',      slug:'politics-global',    wpId:5325, query:'UK politics OR global news OR parliament OR international affairs' },\n  global:        { label:'Politics',      slug:'politics-global',    wpId:5325, query:'UK politics OR global news OR parliament OR international affairs' }\n};\n\nconst isReset     = text === '/start' || text === '/reset' ||\n  /\\b(new article|new post|start over|start again|fresh start|another article|write another)\\b/.test(text);\nconst isStatusReq = text === '/status';\n\n// Anchored at the start of the message so it cannot collide with ordinary prose. It must be\n// tested before wantsWp, because that regex matches \\bpost\\b and \\bwp\\b - so a request like\n// \"image london skyline on the post\" would otherwise route to WordPress.\nconst imageMatch = raw.trim().match(/^\\/?image\\b[:\\s]*(.*)$/i);\nconst wantsImage  = !!imageMatch;\nconst imageQuery  = imageMatch ? imageMatch[1].trim() : '';\n\nconst wantsWp     = /\\b(post|publish|wordpress|wp|send to wp|go live)\\b/.test(text);\nconst wantsSocial = /\\b(social|twitter|linkedin|facebook|instagram|hashtag|thumbnail)\\b/.test(text);\n\nlet intent = 'unknown';\nlet statusMsg = '';\nlet newsQuery = '';\nlet isPublish = false;\n\nif (isStatusReq) {\n  intent = 'status';\n} else if (isReset) {\n  intent = 'reset';\n  statusMsg = '\\ud83d\\udd04 Resetting your PromoMag session...';\n} else if (wantsImage) {\n  // Deliberately stage-independent: the target is whatever was published most recently,\n  // which may be a scheduled post from a session that no longer exists.\n  intent = imageQuery ? 'image' : 'unknown';\n  statusMsg = '\\ud83d\\uddbc\\ufe0f Searching for *' + imageQuery + '* and checking the latest post...';\n} else if (wantsWp && s.stage === 'ARTICLE_READY') {\n  intent = 'wordpress';\n  isPublish = /\\b(publish|go live|make it live|post live)\\b/.test(text);\n  statusMsg = isPublish\n    ? '\\ud83d\\ude80 *Publishing to PromoMag...*'\n    : '\\ud83d\\udce4 *Saving to PromoMag as a draft...*';\n} else if (wantsSocial && s.stage === 'ARTICLE_READY') {\n  intent = 'social';\n  statusMsg = '\\ud83d\\udcf1 *Building your social pack...*';\n} else if (wantsWp || wantsSocial) {\n  // Asked to post or socialise before an article exists - explain rather than misread it.\n  intent = 'unknown';\n} else if (s.stage === 'IDLE') {\n  const m = text.match(/business|finance|entertainment|arts|environment|nature|science|technology|politics|global/);\n  if (m) {\n    const c = CATS[m[0]];\n    s.category = c;\n    intent = 'category';\n    newsQuery = c.query;\n    statusMsg = '\\ud83d\\udd0d Researching trending *' + c.label + '* stories from Reuters, Bloomberg, BBC and more...\\n\\n_This takes 20\\u201330 seconds._';\n  }\n} else if (s.stage === 'AWAITING_TOPIC') {\n  intent = 'topic';\n  statusMsg = '\\ud83d\\udccb Got it \\u2014 building your outline...';\n} else if (s.stage === 'AWAITING_DIRECTION') {\n  intent = 'direction';\n  statusMsg = '\\u270d\\ufe0f *Writing the full article now...*\\n\\n_30\\u201360 seconds._';\n}\n\nconst IMAGE_HELP = 'Send *image <search term>* at any time to replace the featured image on the most recent post.';\n\nconst STAGE_HELP = {\n  IDLE: 'Choose a category to begin:\\n\\nBusiness & Finance | Entertainment & Arts | Environment & Nature | Science & Technology | Politics & Global News\\n\\n' + IMAGE_HELP,\n  AWAITING_TOPIC: 'Reply with a topic number (1\\u20135) from the list above.',\n  AWAITING_DIRECTION: 'Reply with the stance for the article:\\n\\n1. Supportive \\u2014 argue in favour\\n2. Critical \\u2014 argue against\\n3. Neutral \\u2014 report it straight',\n  ARTICLE_READY: 'Reply *post to WordPress* for a draft, *publish to WordPress* to go live, or *social* for a social pack.\\n\\n' + IMAGE_HELP\n};\n\nconst guidanceMsg = '\\ud83e\\udd14 I did not follow that.\\n\\n' + (STAGE_HELP[s.stage] || STAGE_HELP.IDLE) +\n  '\\n\\nSend /status to see where we are, or /reset to start again.';\n\nconst statusReport = '\\ud83d\\udccd *Session status*\\n\\nStage: `' + s.stage + '`\\nCategory: ' +\n  (s.category ? s.category.label : '\\u2014') + '\\nTopic: ' + (s.topicTitle || '\\u2014') +\n  '\\nStance: ' + (s.direction || '\\u2014') +\n  '\\nArticle drafted: ' + (s.stage === 'ARTICLE_READY' ? 'yes' : 'no') + '\\n\\n' + STAGE_HELP[s.stage];\n\nsd[key] = s;\n\n// Legacy field names retained so the existing branch conditions keep working unchanged.\n// `query` duplicates imageQuery because the image sub-workflow reads j.query on a\n// passthrough trigger, which does no field mapping of its own.\nreturn [{ json: {\n  chatId,\n  originalText: raw,\n  intent,\n  stage: s.stage,\n  isStatusReq: intent === 'status',\n  isUnknown:   intent === 'unknown',\n  isReset:     intent === 'reset',\n  isWPIntent:  intent === 'wordpress',\n  isCategory:  intent === 'category',\n  isTopicPick: intent === 'topic',\n  isDirection: intent === 'direction',\n  isImage:     intent === 'image',\n  imageQuery,\n  query: imageQuery,\n  newsQuery,\n  isPublish,\n  statusMsg,\n  guidanceMsg,\n  statusReport,\n  category: s.category || null\n}}];"
+      },
+      "id": "d0cbea4b-d602-4a6c-af97-30facad27430",
+      "name": "Detect Stage",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2896,
+        896
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "wp-check",
+              "leftValue": "={{ $json.isWPIntent }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "48e493bb-7b21-4aba-9b72-e3c09f178a36",
+      "name": "Is WordPress Intent?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -2432,
+        896
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.statusMsg }}",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "appendAttribution": false
+        }
+      },
+      "id": "1041850e-ab0d-49a3-be05-33ff729d729c",
+      "name": "Send Status Message",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -2208,
+        1040
+      ],
+      "webhookId": "4a8481ff-0e66-4d95-8771-59616299ac47",
+      "credentials": {
+        "telegramApi": {
+          "id": "F7kV4EHRCT4GkYho",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.statusMsg }}",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "appendAttribution": false
+        }
+      },
+      "id": "85746821-1a3c-422e-aae9-dd30b5e15850",
+      "name": "Send WP Status",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -2208,
+        768
+      ],
+      "webhookId": "b1bfff5d-37f5-401b-9d13-502a096f37bc",
+      "credentials": {
+        "telegramApi": {
+          "id": "F7kV4EHRCT4GkYho",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "agent": "conversationalAgent",
+        "promptType": "define",
+        "text": "={{ $json.promptText }}",
+        "options": {
+          "systemMessage": "RESPONSE EXECUTION RULES — HIGHEST PRIORITY, ALWAYS APPLY:\n- NEVER send any holding message, acknowledgement, or status update. No \"great choice\", \"thank you\", \"I will now\", \"please hold on\", \"noted\", \"I'll write\", \"I'll proceed\". These break the workflow. Zero exceptions.\n- Always return the COMPLETE output of the current step in a single response. Never split across messages.\n- When a category word is in the user's message → immediately return the full 5-topic list. Nothing else first.\n- When a topic number or name is confirmed → immediately return the full table of contents AND narrative direction question in the same message. Nothing else first.\n- When the user provides ANY narrative direction OR any short affirmation (\"good\", \"ok\", \"yes\", \"great\", \"sounds good\", \"perfect\", \"do it\") after the ToC step → IMMEDIATELY write and return the complete article starting with [BLOCK:METADATA]. No acknowledgement. Start with [BLOCK:METADATA] immediately.\n- If the user says \"create the article\", \"write the article\", \"draft it\" at any point after a topic is selected → write the article immediately.\n- One message in, one complete response out. No exceptions.\n\nCRITICAL INPUT HANDLING:\nIf the user's message contains any of the following words — business, finance, entertainment, arts, environment, nature, science, technology, politics — treat it IMMEDIATELY as a category selection and go directly to Step 2. Do NOT ask them to choose again. Return the full 5-topic list immediately.\n\nABSOLUTE RULES:\n1. You are a writing assistant ONLY. Never mention images, DALL-E, featured images, or visual content. The workflow handles this invisibly.\n2. When writing a full article, you MUST use the exact [BLOCK:] format below. Without these markers the article cannot be saved or posted to WordPress.\n3. Never output a plain article without block markers.\n4. NEVER use section headings, subheadings, bold section labels, or ## markers anywhere in the article body. Zero exceptions.\n\n---\n\nYou are a professional feature writer for PromoMag.co.uk. Your writing mirrors the Wall Street Journal and the Financial Times — authoritative, precise, with a strong editorial voice and a continuous narrative that never uses section headers.\n\n---\n\nFLOW — FOLLOW EXACTLY:\n\nSTEP 1 — CATEGORY SELECTION:\nIf no category provided yet, ask the user to choose:\nBusiness & Finance | Entertainment & Arts | Environment & Nature | Science & Technology | Politics & Global News\nIf the user's message contains a category word, skip to Step 2 immediately.\n\nSTEP 2 — TOPIC RESEARCH (after category chosen):\nA live research brief will be provided in [LIVE RESEARCH BRIEF] or [RESEARCH CONTEXT] tags. You MUST base your 5 topic suggestions on this real research — not on your training data.\n- Present 5 topics drawn directly from the research brief\n- For each topic, state: what it is, why it is newsworthy right now (citing the specific source and date from the brief), and its UK/USA search traffic potential\n- Ask user to confirm their pick\n\nSTEP 3 — TABLE OF CONTENTS + NARRATIVE DIRECTION (after topic confirmed):\n- Immediately present the structured table of contents\n- In the SAME message, ask for the narrative angle with 3-4 relevant examples\n- Wait for one reply covering both confirmation and direction\n\nSTEP 4 — FULL ARTICLE (after narrative direction provided):\n- BEGIN WRITING IMMEDIATELY. No further questions.\n- Write the COMPLETE article in a SINGLE response.\n- MUST be 1,500-1,800 words. No truncation.\n\nRESEARCH GROUNDING — CRITICAL:\nWhen a [LIVE RESEARCH BRIEF] or [RESEARCH CONTEXT] is provided, you MUST:\n- Open the article with a specific real fact, figure, date, or named person from the research brief — not a generic scene-setting opener\n- Reference at least 4 specific facts from the research brief within the article body, each attributed to the source name and date provided\n- Use exact figures, percentages, and quotes where the research provides them — do not paraphrase into vagueness\n- If the brief mentions a named person making a statement, quote or closely paraphrase them with attribution\n- Do not invent facts, statistics, or quotes. If the research brief lacks detail on a point, acknowledge the gap rather than filling it with fiction\n- Every claim that could be fact-checked must trace back to the research brief or be clearly flagged as context from your training data with the note [requires verification]\n\nWALL STREET JOURNAL STYLE — MANDATORY:\n- No section headings. No subheadings. No ## markers. No bold labels. Zero.\n- One continuous flowing narrative from first word to last.\n- Open with a SPECIFIC hook — a real named person, a precise figure from the research, a specific event with a date. Never open with \"In a world where...\" or \"In recent years...\"\n- SENTENCE RHYTHM: Every 3-4 long sentences must be followed by one short sentence of 10 words or fewer. This is non-negotiable.\n- BANNED PHRASES — never use these:\n  * \"the implications are significant\"\n  * \"the stakes are high\"\n  * \"the choices made will define X for a generation\"\n  * \"it remains to be seen\"\n  * \"only time will tell\"\n  * \"in conclusion\"\n  * \"ultimately\"\n  * \"in a world where\"\n  * \"in recent years\"\n- Take a clear editorial position shaped by the user's narrative direction. Do not hedge both sides equally — argue the stated position using the evidence.\n- End with a specific forward-looking statement: what will happen next, what to watch for, or what the evidence points to. The final sentence must have conviction — not hope, not a question.\n\nOUTPUT FORMAT — USE EXACTLY:\n\n[BLOCK:METADATA]\nTitle: [SEO-optimized title]\nAuthor: By PromoMag [Category] Desk | [Current Month Year from CURRENT DATE tag]\nMeta: [150-word meta description]\nSlug: [url-slug-here]\nTags: [tag1, tag2, tag3, tag4, tag5]\nImage: [Detailed vivid scene description — no people, no faces, focus on objects/landscapes/architecture/concepts]\n[/BLOCK]\n\n[BLOCK:ARTICLE]\n[Full 1,500-1,800 word article. Continuous prose. No headings. No ## markers. No bullet points. WSJ style. Research-grounded with named sources and specific facts.]\n[/BLOCK]\n\n[BLOCK:SEO]\nArticle drafted and saved.\n\n- Reply *post to WordPress* to save as a draft on PromoMag.co.uk\n- Reply *publish to WordPress* to go live immediately on PromoMag.co.uk\n- Reply *yes* for a social media pack (captions, hashtags, thumbnail brief)\n[/BLOCK]\n\nSTEP 5 — SOCIAL MEDIA PACK (if user replies yes):\n- X caption (under 280 chars, punchy, opinionated)\n- LinkedIn caption (3-4 sentences, professional with clear POV)\n- Facebook caption (2-3 sentences, conversational)\n- Instagram caption + 10 hashtags\n- Thumbnail concept: scene + overlay text\n\n---\n\nDATE AND CURRENCY:\n- The current date is provided as [CURRENT DATE: ...]. Always use this for the Author byline.\n- Never reference dates from your training data without the [requires verification] flag.\n\nPOLITICS & GLOBAL NEWS — ADDITIONAL RULES:\n- UK focus: Parliament, party politics, policy, elections, ministers\n- Global focus: G7/G20, US politics, EU affairs, geopolitical tensions\n- Always attribute political positions to named individuals or parties\n- Include polling data with source and date where the research provides it\n\nSOURCES:\n- Prefer root materials: peer-reviewed studies, official datasets, government reports\n- Reference specific outlets and named journalists from the research brief when provided\n- Citation format: [Source Name, Month Year]\n- Do not link to news articles\n\nVOICE:\n- Strong editorial voice. Argue the stated narrative direction confidently.\n- Specific numbers, named organisations, real consequences — never vague generalisations.\n- NEVER write a sentence that could apply to any article on any topic. Every sentence must be specific to this story.\n- Do not fabricate facts. Opinion through framing and emphasis, not invention."
+        }
+      },
+      "id": "d3c543ff-8316-4bcb-9cdd-12e867706f08",
+      "name": "AI Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        -1184,
+        896
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o",
+        "options": {
+          "maxTokens": 10000,
+          "temperature": 0.7
+        }
+      },
+      "id": "c8386d3b-eb96-458d-b765-7019cd319a51",
+      "name": "OpenAI Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.1,
+      "position": [
+        -1264,
+        1664
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "hi9jgbWx4TTKkRVO",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Prepare Session').item.json.sessionKey }}",
+        "contextWindowLength": 20
+      },
+      "id": "716675e3-8bf5-40d9-b4d2-2a5a9baf9bc0",
+      "name": "Window Buffer Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        -1120,
+        1248
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const CHUNK_SIZE = 3800;\nconst TELEGRAM_MAX = 4000;\nconst output = $input.item.json.output || '';\nconst chatId = (()=>{try{return $('Telegram Trigger').item.json.message.chat.id}catch(e){return $getWorkflowStaticData('global')['currentChatId']}})();\nconst items = [];\n\n// Bound each block at [/BLOCK] OR at the next [BLOCK: marker, whichever comes first.\n// Writing agents sometimes omit the closers entirely; the old 'take everything to the end'\n// fallback made METADATA swallow the whole article and breach Telegram's 4096-char limit.\nconst extractBlock = (tag, text) => {\n  const open = '[BLOCK:' + tag + ']';\n  const start = text.indexOf(open);\n  if (start === -1) return null;\n  const contentStart = start + open.length;\n  const closeIdx = text.indexOf('[/BLOCK]', contentStart);\n  const nextIdx = text.indexOf('[BLOCK:', contentStart);\n  const bounds = [closeIdx, nextIdx].filter(i => i !== -1);\n  const end = bounds.length ? Math.min.apply(null, bounds) : text.length;\n  return text.slice(contentStart, end).trim();\n};\n\nconst parseField = (block, field) => {\n  if (!block) return '';\n  const lines = block.split('\\n');\n  for (const line of lines) {\n    const prefix = field + ':';\n    if (line.trim().startsWith(prefix)) return line.trim().slice(prefix.length).trim();\n  }\n  return '';\n};\n\nconst chunkText = (text) => {\n  const chunks = [];\n  let remaining = String(text || '');\n  while (remaining.length > 0) {\n    let chunk = remaining.slice(0, CHUNK_SIZE);\n    if (remaining.length > CHUNK_SIZE) {\n      const lastNewline = chunk.lastIndexOf('\\n');\n      if (lastNewline > CHUNK_SIZE * 0.5) chunk = chunk.slice(0, lastNewline);\n    }\n    chunks.push(chunk.trim());\n    remaining = remaining.slice(chunk.length).trim();\n  }\n  return chunks;\n};\n\n// Last line of defence: nothing leaves this node above the Telegram limit, whatever\n// shape the model returned. A 400 here aborts the whole run before the image path.\nconst pushMsg = (text, generateImage) => {\n  const parts = chunkText(text);\n  for (let i = 0; i < parts.length; i++) {\n    const isLast = i === parts.length - 1;\n    items.push({ json: {\n      chatId: chatId,\n      text: parts[i].slice(0, TELEGRAM_MAX),\n      generateImage: generateImage && isLast\n    }});\n  }\n};\n\nconst metadataBlock = extractBlock('METADATA', output);\nconst articleBlock = extractBlock('ARTICLE', output);\nconst seoBlock = extractBlock('SEO', output);\nconst isCompleteArticle = !!(metadataBlock && articleBlock && seoBlock);\nconst hasBlocks = !!(metadataBlock || articleBlock || seoBlock);\n\nconst detectCategory = (meta) => {\n  const author = parseField(meta, 'Author').toLowerCase();\n  if (author.indexOf('business') !== -1 || author.indexOf('finance') !== -1) return 'business-finance';\n  if (author.indexOf('entertainment') !== -1 || author.indexOf('arts') !== -1) return 'entertainment-arts';\n  if (author.indexOf('environment') !== -1 || author.indexOf('nature') !== -1) return 'environment-nature';\n  if (author.indexOf('science') !== -1 || author.indexOf('technology') !== -1) return 'science-technology';\n  if (author.indexOf('politics') !== -1 || author.indexOf('global') !== -1 || author.indexOf('news') !== -1) return 'politics-global';\n  return 'uncategorized';\n};\n\nif (isCompleteArticle) {\n  const staticData = $getWorkflowStaticData('global');\n  staticData['currentChatId'] = chatId; // reliable chatId for post-Merge nodes\n\n  // Prefer the category the user actually chose this session over guessing from the byline.\n  const sess = staticData['session_' + chatId] || {};\n  const chosen = sess.category && sess.category.slug ? sess.category.slug : detectCategory(metadataBlock);\n\n  staticData['article_' + chatId] = {\n    title: parseField(metadataBlock, 'Title'),\n    slug: parseField(metadataBlock, 'Slug'),\n    excerpt: parseField(metadataBlock, 'Meta'),\n    tags: parseField(metadataBlock, 'Tags'),\n    imageDescription: parseField(metadataBlock, 'Image'),\n    content: articleBlock,\n    category: chosen,\n    wpMediaId: 0,\n    wpMediaUrl: null\n  };\n\n  // Advance the state machine so the WordPress and social gates open.\n  sess.stage = 'ARTICLE_READY';\n  staticData['session_' + chatId] = sess;\n}\n\nif (isCompleteArticle) {\n  pushMsg('\\ud83d\\udcf0 *Article Brief*\\n\\n' + metadataBlock, false);\n\n  const clean = articleBlock\n    .split('\\n')\n    .filter(function(l) { return !l.trim().match(/^#{1,6}\\s/); })\n    .join('\\n')\n    .replace(/\\n{3,}/g, '\\n\\n')\n    .trim();\n\n  const chunks = chunkText(clean);\n  for (let i = 0; i < chunks.length; i++) {\n    const label = chunks.length > 1\n      ? '\\u270d\\ufe0f *Article Body (' + (i + 1) + '/' + chunks.length + ')*\\n\\n' + chunks[i]\n      : '\\u270d\\ufe0f *Article Body*\\n\\n' + chunks[i];\n    items.push({ json: { chatId: chatId, text: label.slice(0, TELEGRAM_MAX), generateImage: false } });\n  }\n\n  pushMsg('\\ud83d\\udce3 *Next Step*\\n\\n' + seoBlock, true);\n\n} else if (hasBlocks) {\n  const partialText = output\n    .replace(/\\[BLOCK:[^\\]]+\\]/g, '')\n    .replace(/\\[\\/BLOCK\\]/g, '')\n    .trim();\n  pushMsg(partialText || output, false);\n} else {\n  pushMsg(output || 'No response generated.', false);\n}\n\nreturn items.length > 0\n  ? items\n  : [{ json: { chatId: chatId, text: '\\u26a0\\ufe0f No content returned. Please try again.', generateImage: false } }];"
+      },
+      "id": "7cd39e34-05b2-43d0-be03-e5478bcc23e5",
+      "name": "Parse Blocks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -640,
+        1296
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "appendAttribution": false
+        }
+      },
+      "id": "58898e8b-a0b3-4e02-8650-ba6e70296b8f",
+      "name": "Send Block",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -960,
+        1168
+      ],
+      "webhookId": "fe36b24f-20fd-4220-9d6c-6743eb1aac09",
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "telegramApi": {
+          "id": "F7kV4EHRCT4GkYho",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const chatId = (()=>{try{return $('Telegram Trigger').item.json.message.chat.id}catch(e){return $getWorkflowStaticData('global')['currentChatId']}})();\nconst staticData = $getWorkflowStaticData('global');\nconst article = staticData['article_' + chatId];\n\n// Read publish intent from Detect Stage\nconst isPublish = $('Detect Stage').item.json.isPublish || false;\n\nif (!article) {\n  return [{ json: {\n    chatId: chatId, error: true,\n    errorMsg: '⚠️ *No article found*\\n\\nDraft an article first, then reply *post to WordPress* or *publish to WordPress*.'\n  }}];\n}\n\nreturn [{ json: {\n  chatId: chatId, error: false,\n  title: article.title || 'Untitled Article',\n  content: article.content || '',\n  slug: article.slug || '',\n  excerpt: article.excerpt || '',\n  tags: article.tags || '',\n  category: article.category || 'uncategorized',\n  wpMediaId: article.wpMediaId || 0,\n  isPublish: isPublish\n}}];"
+      },
+      "id": "8dce4b79-577d-478f-9b4d-6d966d937815",
+      "name": "Retrieve Stored Article",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1984,
+        768
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {},
+          "conditions": [
+            {
+              "id": "article-found",
+              "leftValue": "={{ $json.error }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "f0c6c82f-3233-45e2-b6ac-c2e22da7d4fa",
+      "name": "Article Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -1776,
+        768
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $json.content || '';\n\nconst html = raw\n  .split('\\n')\n  .filter(function(line) { return !line.trim().match(/^#{1,6}\\s/); })\n  .join('\\n')\n  .replace(/\\*\\*(.+?)\\*\\*/g, '<strong>$1</strong>')\n  .replace(/(?<!\\*)\\*([^*]+)\\*(?!\\*)/g, '<em>$1</em>')\n  .replace(/^>\\s?(.+)/gm, '<blockquote>$1</blockquote>')\n  .split(/\\n\\n+/)\n  .map(function(para) {\n    const t = para.trim();\n    if (!t) return '';\n    if (t.startsWith('<blockquote>')) return t;\n    return '<p>' + t.replace(/\\n/g, '<br>') + '</p>';\n  })\n  .filter(Boolean)\n  .join('\\n\\n');\n\nreturn [{ json: {\n  chatId: $json.chatId,\n  title: $json.title,\n  content: html,\n  slug: $json.slug,\n  excerpt: $json.excerpt,\n  tags: $json.tags,\n  category: $json.category || 'uncategorized',\n  wpMediaId: $json.wpMediaId || 0,\n  isPublish: $json.isPublish || false\n}}];"
+      },
+      "id": "d216528d-53ce-4581-9472-f0046f9a19bb",
+      "name": "Convert to HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1552,
+        704
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// PromoMag.co.uk verified category IDs\n// Source: https://promomag.co.uk/wp-json/wp/v2/categories\nconst categoryMap = {\n  'business-finance':   2,\n  'entertainment-arts': 105,\n  'environment-nature': 162,\n  'science-technology': 296,\n  'politics-global':    5325\n};\n\nconst slug = $json.category || 'uncategorized';\nconst categoryId = categoryMap[slug] || 1;\n\nreturn [{ json: {\n  chatId: $json.chatId,\n  title: $json.title,\n  content: $json.content,\n  slug: $json.slug,\n  excerpt: $json.excerpt,\n  tags: $json.tags,\n  wpMediaId: $json.wpMediaId || 0,\n  categoryId: categoryId,\n  isPublish: $json.isPublish || false\n}}];"
+      },
+      "id": "0f03b9b1-7099-41c6-9932-87abb8e2745b",
+      "name": "Map Category ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1328,
+        704
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://promomag.co.uk/wp-json/wp/v2/posts",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={\n  \"title\": {{ JSON.stringify($json.title) }},\n  \"content\": {{ JSON.stringify($json.content) }},\n  \"status\": {{ $json.isPublish ? JSON.stringify(\"publish\") : JSON.stringify(\"draft\") }},\n  \"slug\": {{ JSON.stringify($json.slug) }},\n  \"excerpt\": {{ JSON.stringify($json.excerpt) }},\n  \"featured_media\": {{ $json.wpMediaId || 0 }},\n  \"categories\": [{{ $json.categoryId || 1 }}],\n  \"tags\": {{ JSON.stringify($json.tagIds || []) }}\n}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "9ec70c51-7973-4dce-a3b8-0f5495f45d30",
+      "name": "Post to WordPress",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        784,
+        224
+      ],
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "jkmcRGFCJbTsbiYb",
+          "name": "n8n PromoMag"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nconst chatId = staticData['currentChatId'] || $json.chatId;\nconst wpResponse = $input.item.json.body || $input.item.json;\nconst postId = wpResponse.id;\nconst isPublished = wpResponse.status === 'publish';\nconst postUrl = wpResponse.link || ('https://promomag.co.uk/?p=' + postId);\n\nreturn [{ json: {\n  chatId: chatId,\n  text: isPublished\n    ? '🚀 *Article published on PromoMag!*\\n\\n📄 Status: Live\\n\\n🔗 [View Article](' + postUrl + ')\\n🔗 [Edit in WP Admin](https://promomag.co.uk/wp-admin/post.php?post=' + postId + '&action=edit)'\n    : '✅ *Article saved as draft on PromoMag!*\\n\\n📄 Status: Draft\\n\\n🔗 [Open in WP Admin](https://promomag.co.uk/wp-admin/post.php?post=' + postId + '&action=edit)\\n\\n_Review and publish when ready._'\n}}];"
+      },
+      "id": "42bba04f-4a3a-40d8-acb9-2065de0bd206",
+      "name": "Format WP Success",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1008,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nconst chatId = staticData['currentChatId'] || $json.chatId;\nconst err = $json.error ? ($json.error.message || JSON.stringify($json.error)) : JSON.stringify($json);\n\n// Telegram parses this message as Markdown and a raw WP error payload is full of\n// underscores, asterisks, brackets and backticks. An unbalanced one returns a 400\n// and the failure notice itself fails to send.\nconst safe = String(err)\n  .replace(/[_*\\[\\]`]/g, ' ')\n  .replace(/\\s+/g, ' ')\n  .trim()\n  .slice(0, 200);\n\nreturn [{ json: {\n  chatId: chatId,\n  text: '\\u26a0\\ufe0f *WordPress Post Failed*\\n\\nThe article is still stored. Reply *post to WordPress* to retry.\\n\\nError: ' + safe\n}}];"
+      },
+      "id": "afd1491d-286b-40de-a0dc-875a16b369a9",
+      "name": "Format WP Post Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1008,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "appendAttribution": false
+        }
+      },
+      "id": "c63e5893-5955-42a8-afcb-1f006907e665",
+      "name": "Send WP Result",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1216,
+        272
+      ],
+      "webhookId": "d6a2485b-5fa0-4732-95c3-403a8af02a2d",
+      "credentials": {
+        "telegramApi": {
+          "id": "F7kV4EHRCT4GkYho",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.errorMsg }}",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "appendAttribution": false
+        }
+      },
+      "id": "193cf0c1-4477-4704-a975-1eaf9230b37f",
+      "name": "Send No Article Error",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -1552,
+        864
+      ],
+      "webhookId": "c781ac9f-2411-4fe0-ae12-de3f3c3e97f8",
+      "credentials": {
+        "telegramApi": {
+          "id": "F7kV4EHRCT4GkYho",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const chatId = (()=>{try{return $('Telegram Trigger').item.json.message.chat.id}catch(e){return $getWorkflowStaticData('global')['currentChatId']}})();\nconst errorMsg = $input.item.json.error ? $input.item.json.error.message : 'Unknown error';\nreturn [{ json: { chatId: chatId, text: '⚠️ *PromoMag Error*\\n\\nSomething went wrong. Send /reset to start fresh.\\n\\n_' + String(errorMsg).slice(0, 200) + '_' } }];"
+      },
+      "id": "b51e56d9-524d-4cd6-9dfa-8c8e5a3a436d",
+      "name": "Format AI Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -336,
+        1328
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "appendAttribution": false
+        }
+      },
+      "id": "060e8fac-7736-4ed9-bbf1-45bcae4c2564",
+      "name": "Send AI Error",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -816,
+        1504
+      ],
+      "webhookId": "53ff8403-a8eb-45e2-a68f-668056ed0e1a",
+      "credentials": {
+        "telegramApi": {
+          "id": "F7kV4EHRCT4GkYho",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "reset-check",
+              "leftValue": "={{ $json.isReset }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "ffab4ff7-7b12-40a0-a847-f8ebe9591d5a",
+      "name": "Is Reset?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -2512,
+        896
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const chatId = (()=>{try{return $('Telegram Trigger').item.json.message.chat.id}catch(e){return $getWorkflowStaticData('global')['currentChatId']}})();\nconst sd = $getWorkflowStaticData('global');\n\n// Clear the state machine session plus every per-chat scratch key.\ndelete sd['session_' + chatId];\ndelete sd['article_' + chatId];\ndelete sd['categoryChosen_' + chatId];\ndelete sd['researchBrief_' + chatId];\ndelete sd['researchInput_' + chatId];\ndelete sd['pendingPost_' + chatId];\n\n// Bump the counter so the memory session key changes too.\nconst counterKey = 'sessionCounter_' + chatId;\nsd[counterKey] = (sd[counterKey] || 0) + 1;\n\nreturn [{ json: {\n  chatId: chatId,\n  text: '\\u2705 *Session reset.*\\n\\nAll previous article data cleared. Choose a category to begin:\\n\\nBusiness & Finance | Entertainment & Arts | Environment & Nature | Science & Technology | Politics & Global News'\n}}];"
+      },
+      "id": "9905af77-c810-406c-8f13-229b75fd00e6",
+      "name": "Reset Session",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2464,
+        768
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "appendAttribution": false
+        }
+      },
+      "id": "0a6c9b2b-2c64-490f-b055-c4ac9a7d31cf",
+      "name": "Send Reset Confirmation",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -2192,
+        592
+      ],
+      "webhookId": "64eee3a1-3526-419a-b4ea-e873f227918a",
+      "credentials": {
+        "telegramApi": {
+          "id": "F7kV4EHRCT4GkYho",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "gen-image-check",
+              "leftValue": "={{ $json.generateImage }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "56184846-a405-4fa9-87a6-a3ac33d5f494",
+      "name": "Should Generate Image?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -864,
+        1296
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Parse Blocks').item.json.chatId }}",
+        "text": "🖼️ *Sourcing your featured image...*\n\n_Finding the best image and uploading to PromoMag — about 20–30 seconds._",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "appendAttribution": false
+        }
+      },
+      "id": "b122f70e-2e78-46b2-bebe-1bdcf3a800c1",
+      "name": "Send Generating Status",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -736,
+        976
+      ],
+      "webhookId": "9f4dc84c-3d3d-4e55-a65d-8e8be01faf50",
+      "credentials": {
+        "telegramApi": {
+          "id": "F7kV4EHRCT4GkYho",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\n\nlet chatId;\ntry {\n  chatId = (()=>{try{return $('Telegram Trigger').item.json.message.chat.id}catch(e){return $getWorkflowStaticData('global')['currentChatId']}})();\n} catch(e) {\n  chatId = staticData['currentChatId'];\n}\n\nif (!chatId) throw new Error('Could not resolve chatId for image generation');\n\nconst article = staticData['article_' + chatId];\nif (!article) throw new Error('No stored article found for chatId: ' + chatId);\n\nconst imageDescription = article.imageDescription || article.title || 'Professional editorial magazine photograph';\n\nconst imagePrompt = [\n  'Professional editorial magazine header photograph for a web publication.',\n  imageDescription,\n  'Cinematic lighting, photojournalism aesthetic, widescreen 16:9 composition.',\n  'No people, no faces, no portraits, no humans visible.',\n  'Focus on objects, landscapes, technology, architecture, abstract concepts, or symbolic imagery.',\n  'No text, no watermarks, no logos.'\n].join(' ');\n\nreturn [{ json: { chatId, imagePrompt } }];"
+      },
+      "id": "0d28e067-e507-4cf3-8e65-e2af35ff3e52",
+      "name": "Build DALL-E Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -512,
+        976
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/images/generations",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"dall-e-3\",\n  \"prompt\": \"{{ $json.imagePrompt }}\",\n  \"n\": 1,\n  \"size\": \"1792x1024\",\n  \"quality\": \"standard\",\n  \"response_format\": \"url\"\n}",
+        "options": {}
+      },
+      "id": "cac6cea4-5fda-40fa-a2ca-a6bcfee20e3a",
+      "name": "Generate DALL-E Image",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        160,
+        1104
+      ],
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "openAiApi": {
+          "id": "hi9jgbWx4TTKkRVO",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.imageUrl }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "imageData"
+            }
+          }
+        }
+      },
+      "id": "4208a67e-5cf6-4491-bfcd-10ed81621120",
+      "name": "Download Final Image Binary",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        976
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const chatId = (()=>{try{return $('Telegram Trigger').item.json.message.chat.id}catch(e){return $getWorkflowStaticData('global')['currentChatId']}})();\nconst staticData = $getWorkflowStaticData('global');\nconst article = staticData['article_' + chatId];\nconst title = (article && article.title) ? article.title : 'promomag-article';\nconst filename = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 60) + '-featured.png';\n\n// Pass binary data through so Upload to WP Media can find imageData\nreturn [{\n  json: { chatId: chatId, filename: filename },\n  binary: $input.item.binary\n}];"
+      },
+      "id": "f6569bcd-479a-4e09-8ebf-90b7bf99a9ee",
+      "name": "Build Filename",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        144,
+        976
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://promomag.co.uk/wp-json/wp/v2/media",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Disposition",
+              "value": "=attachment; filename=\"promomag-featured-{{ Date.now() }}.{{ $binary.imageData.fileExtension || 'jpg' }}\""
+            },
+            {
+              "name": "Content-Type",
+              "value": "={{ $binary.imageData.mimeType || 'image/jpeg' }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "imageData",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "0aacc921-6d7d-4947-9085-503e16602f7a",
+      "name": "Upload to WP Media",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1248,
+        1232
+      ],
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "jkmcRGFCJbTsbiYb",
+          "name": "n8n PromoMag"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nconst chatId = staticData['currentChatId'];\n\nif (!chatId) {\n  return [{ json: { chatId: null, wpMediaId: null, wpMediaUrl: null } }];\n}\n\nconst raw = $input.item.json;\nconst body = raw.body || raw;\n\nconst wpMediaId = body.id || null;\nconst wpMediaUrl = body.source_url\n  || (body.guid && body.guid.rendered)\n  || (body.guid && body.guid.raw)\n  || null;\n\nif (wpMediaId) {\n  if (staticData['article_' + chatId]) {\n    staticData['article_' + chatId].wpMediaId = wpMediaId;\n    staticData['article_' + chatId].wpMediaUrl = wpMediaUrl;\n  }\n}\n\n// Log for debugging\nif (!wpMediaUrl) {\n  console.log('Store WP Media ID: wpMediaUrl is null. Raw response:', JSON.stringify(raw).slice(0, 500));\n}\n\nreturn [{ json: {\n  chatId,\n  wpMediaId,\n  wpMediaUrl,\n  hasUrl: !!wpMediaUrl\n} }];"
+      },
+      "id": "4816c681-8eb3-4388-b71b-de3d6ae7f542",
+      "name": "Store WP Media ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        976
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "sendPhoto",
+        "chatId": "={{ $json.chatId }}",
+        "additionalFields": {
+          "caption": "🖼️ *Featured image sourced and saved to PromoMag*\n\nThis image is stored and will be set as the featured image when you post.\n\nReply *post to WordPress* to publish, or *yes* for your social media pack.",
+          "parse_mode": "Markdown",
+          "appendAttribution": false
+        },
+        "binaryData": false,
+        "file": "={{ $json.wpMediaUrl }}"
+      },
+      "id": "aa8c3bc7-848d-4100-8d3f-54d622331957",
+      "name": "Send Image Preview",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1360,
+        976
+      ],
+      "webhookId": "db38cf95-12c7-4313-bfdb-78e5798a82c4",
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "telegramApi": {
+          "id": "F7kV4EHRCT4GkYho",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const chatId = (()=>{try{return $('Telegram Trigger').item.json.message.chat.id}catch(e){return $getWorkflowStaticData('global')['currentChatId']}})();\nconst raw = $input.item.json;\n\n// Extract error in whatever format n8n provides\nlet err = 'Unknown error';\nif (raw.error) {\n  if (typeof raw.error === 'string') {\n    err = raw.error;\n  } else if (raw.error.message) {\n    err = raw.error.message;\n  } else if (raw.error.description) {\n    err = raw.error.description;\n  } else {\n    err = JSON.stringify(raw.error).slice(0, 300);\n  }\n} else if (raw.message) {\n  err = raw.message;\n} else if (raw.statusCode) {\n  err = 'HTTP ' + raw.statusCode + ': ' + JSON.stringify(raw).slice(0, 200);\n}\n\n// Sourcing and generation are separate from the WP upload and the Telegram preview,\n// so do not blame \"generation\" for what is usually an upload or send failure.\nreturn [{ json: {\n  chatId: chatId,\n  text: '\\u26a0\\ufe0f *Featured image not attached*\\n\\nThe article itself is saved. You can still post it \\u2014 reply *post to WordPress* \\u2014 then add a featured image manually in WP Admin.\\n\\n_Error: ' + String(err).slice(0, 300) + '_'\n}}];"
+      },
+      "id": "4c0f1461-d73f-4ab9-96e3-53e3b2f87f5a",
+      "name": "Format Image Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        1168
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "appendAttribution": false
+        }
+      },
+      "id": "304cb282-a1f0-458e-9656-1485d45c509e",
+      "name": "Send Image Error",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        608,
+        1136
+      ],
+      "webhookId": "6e1886fb-81de-4de3-a624-f2c82c718e5c",
+      "credentials": {
+        "telegramApi": {
+          "id": "F7kV4EHRCT4GkYho",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "category-check",
+              "leftValue": "={{ $('Detect Stage').item.json.isCategory }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "0fcb32d0-6191-461e-9ba0-676fc8d50e15",
+      "name": "Is Category?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -2032,
+        1040
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.newsUrl }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 15000
+        }
+      },
+      "id": "f0705d0a-69a4-4e37-8efc-834697c68fd4",
+      "name": "Fetch Google News",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -1856,
+        944
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const chatId = (()=>{try{return $('Telegram Trigger').item.json.message.chat.id}catch(e){return $getWorkflowStaticData('global')['currentChatId']}})();\nconst staticData = $getWorkflowStaticData('global');\nconst category = (()=>{try{return $('Detect Stage').item.json.newsQuery}catch(e){return $getWorkflowStaticData('global')['currentNewsQuery']||''}})() || '';\n\nconst now = new Date();\nconst currentDate = now.toLocaleDateString('en-GB', {\n  weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'\n});\n\n// Collect all RSS data from input items (could be multiple feeds merged)\nlet allRssData = '';\nconst inputItems = $input.all ? $input.all() : [$input.item];\nfor (const item of inputItems) {\n  allRssData += (item.json.data || item.json.content || '') + '\\n';\n}\n\n// Google News delivers <description> as CDATA-escaped HTML: &lt;a href=\"...\"&gt;Headline&lt;/a&gt;.\n// The old /<[^>]+>/g strip matched nothing because the angle brackets arrive as entities, so every\n// description survived as ~300 chars of base64 Google redirect URL. Fifteen of those, resent on all\n// five agent turns, were the bulk of the 13,566 input tokens that tripped OpenAI's rate limit.\nconst decodeEntities = (s) => String(s || '')\n  .replace(/&lt;/g, '<')\n  .replace(/&gt;/g, '>')\n  .replace(/&quot;/g, '\"')\n  .replace(/&#39;/g, \"'\")\n  .replace(/&apos;/g, \"'\")\n  .replace(/&nbsp;/g, ' ')\n  .replace(/&amp;/g, '&');\n\nconst stripTags = (s) => decodeEntities(s)\n  .replace(/<[^>]+>/g, ' ')\n  .replace(/\\s+/g, ' ')\n  .trim();\n\nconst norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\\s+/g, ' ').trim();\n\nconst collected = [];\nconst seen = new Set();\nconst itemRegex = /<item>[\\s\\S]*?<\\/item>/g;\nlet match;\nwhile ((match = itemRegex.exec(allRssData)) !== null && collected.length < 60) {\n  const rssItem = match[0];\n\n  const titleMatch = rssItem.match(/<title><!\\[CDATA\\[([\\s\\S]*?)\\]\\]><\\/title>/) || rssItem.match(/<title>([\\s\\S]*?)<\\/title>/);\n  const rawTitle = titleMatch ? stripTags(titleMatch[1]) : '';\n  if (!rawTitle || rawTitle.toLowerCase().includes('google news')) continue;\n  if (seen.has(rawTitle)) continue;\n  seen.add(rawTitle);\n\n  const lastDash = rawTitle.lastIndexOf(' - ');\n  const headline = lastDash > 0 ? rawTitle.slice(0, lastDash).trim() : rawTitle;\n  const titleSource = lastDash > 0 ? rawTitle.slice(lastDash + 3).trim() : '';\n\n  // Prefer the feed's own <source> element over the suffix parsed off the headline.\n  const srcMatch = rssItem.match(/<source[^>]*>([\\s\\S]*?)<\\/source>/);\n  const source = (srcMatch ? stripTags(srcMatch[1]) : '') || titleSource;\n\n  const pubDateMatch = rssItem.match(/<pubDate>([\\s\\S]*?)<\\/pubDate>/);\n  const pubDate = pubDateMatch ? pubDateMatch[1].trim() : '';\n  const parsed = pubDate ? Date.parse(pubDate) : NaN;\n  const ts = isNaN(parsed) ? 0 : parsed;\n\n  // Once decoded, the description is the headline again wrapped in a link, carrying no information\n  // the headline does not. Strip URLs and keep it only when it genuinely adds words.\n  const descMatch = rssItem.match(/<description><!\\[CDATA\\[([\\s\\S]*?)\\]\\]><\\/description>/) || rssItem.match(/<description>([\\s\\S]*?)<\\/description>/);\n  let description = descMatch ? stripTags(descMatch[1]) : '';\n  if (description) {\n    description = description.replace(/https?:\\/\\/\\S+/g, ' ').replace(/\\s+/g, ' ').trim();\n    const isEcho = norm(description).indexOf(norm(headline)) !== -1\n      && description.length < headline.length + 40;\n    if (isEcho || description.length < 40) description = '';\n  }\n\n  collected.push({ headline, source, pubDate, ts, description });\n}\n\n// Google News mixes evergreen and archive pages into a current-affairs query; a 2024 explainer\n// presented as today's news is what produced topic briefs with no live hook. Prefer recent items,\n// but never starve the agent: if too few survive the window, fall back to the full set.\nconst MAX_AGE_DAYS = 45;\nconst cutoff = now.getTime() - MAX_AGE_DAYS * 86400000;\nlet pool = collected.filter(a => a.ts >= cutoff);\nconst staleDropped = collected.length - pool.length;\nlet dateFiltered = true;\nif (pool.length < 5) { pool = collected.slice(); dateFiltered = false; }\npool.sort((a, b) => b.ts - a.ts);\nconst articles = pool.slice(0, 15);\n\nconst fmtDate = (a) => a.ts\n  ? new Date(a.ts).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })\n  : (a.pubDate || '');\n\n// Format as research brief for the Research Agent\nconst researchInput = articles.map(function(a, i) {\n  let entry = (i + 1) + '. ' + a.headline;\n  if (a.source) entry += ' [' + a.source + ']';\n  const d = fmtDate(a);\n  if (d) entry += ' (' + d + ')';\n  if (a.description) entry += '\\n   ' + a.description.slice(0, 240);\n  return entry;\n}).join('\\n\\n');\n\n// Save for later use in writing step\nstaticData['researchInput_' + chatId] = researchInput;\nstaticData['researchDate_' + chatId] = currentDate;\nstaticData['researchCategory_' + chatId] = category;\n\nreturn [{ json: {\n  chatId,\n  currentDate,\n  category,\n  researchInput,\n  articleCount: articles.length,\n  staleDropped,\n  dateFiltered,\n  briefChars: researchInput.length\n}}];"
+      },
+      "id": "f6bd1e92-804b-4122-a3ab-ded252fb1c7e",
+      "name": "Parse RSS and Build Brief",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1632,
+        944
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const originalText = (()=>{try{return $('Telegram Trigger').item.json.message.text}catch(e){return $getWorkflowStaticData('global')['currentPromptText']||''}})();\nconst chatId = (()=>{try{return $('Telegram Trigger').item.json.message.chat.id}catch(e){return $getWorkflowStaticData('global')['currentChatId']}})();\nconst staticData = $getWorkflowStaticData('global');\n\nconst now = new Date();\nconst currentDate = staticData['researchDate_' + chatId]\n  || now.toLocaleDateString('en-GB', {weekday:'long',day:'numeric',month:'long',year:'numeric'});\n\nlet promptText = '[CURRENT DATE: ' + currentDate + ']\\n\\n' + originalText;\n\n// Re-inject structured research brief so Writing Agent has sources when drafting\nconst researchBrief = staticData['researchBrief_' + chatId];\nif (researchBrief) {\n  promptText += '\\n\\n[RESEARCH BRIEF — Use these sourced facts to ground the article. '\n    + 'Reference specific figures, names, and sources from this brief:]\\n\\n'\n    + researchBrief;\n}\n\nreturn [{ json: { promptText } }];"
+      },
+      "id": "3cdb7bf4-8cb3-4501-bcfb-277257f60cc2",
+      "name": "Set Plain Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1856,
+        1136
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const chatId = (()=>{try{return $('Telegram Trigger').item.json.message.chat.id}catch(e){return $getWorkflowStaticData('global')['currentChatId']}})();\nconst staticData = $getWorkflowStaticData('global');\nconst counter = staticData['sessionCounter_' + chatId] || 0;\nconst sessionKey = chatId + '_' + counter;\nconst promptText = $input.item.json.promptText || (()=>{try{return $('Telegram Trigger').item.json.message.text}catch(e){return $getWorkflowStaticData('global')['currentPromptText']||''}})();\n\n// Route on execution state, not static data. A flag written into static data by Scheduled Config\n// is not reliably visible to a downstream IF expression, so scheduled runs were falling through\n// to the interactive chat agent. isExecuted is scoped to this run and cannot go stale.\nconst isScheduled = (()=>{ try { return $('Scheduled Config').isExecuted === true; } catch(e) { return false; } })();\n\n// Carry the intent through so the branch after Is Scheduled Run? can tell a freshly\n// researched topic list apart from a social-pack request.\nconst intent = (()=>{ try { return $('Detect Stage').item.json.intent || ''; } catch(e) { return ''; } })();\n\nreturn [{ json: { promptText, sessionKey, chatId, isScheduled, intent } }];"
+      },
+      "id": "fcab5045-721d-46c1-a454-fe733553c587",
+      "name": "Prepare Session",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1456,
+        1040
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\n\nlet chatId;\ntry {\n  chatId = $('Telegram Trigger').item.json.message.chat.id;\n} catch(e) {\n  chatId = staticData['currentChatId'];\n}\n\nconst article = staticData['article_' + chatId];\nconst title = (article && article.title) ? article.title : '';\nconst imageDescription = (article && article.imageDescription) ? article.imageDescription : '';\n\n// Build the stock-photo query from the Image scene description, not the headline.\n// A title like 'Momentum Builds to Curb AI Development' yielded 'momentum builds curb\n// development' and returned construction-site photos for an article about AI safety.\nconst stopWords = new Set(['the','a','an','of','in','on','at','to','for','with','and','or','but',\n  'is','are','was','were','be','been','being','has','have','had','do','does','did',\n  'will','would','could','should','may','might','shall','its','it','this','that',\n  'how','why','what','when','where','who','which','by','from','as','into','through',\n  'below','above','over','under','their','there','while','also','very']);\n\n// Vague qualifiers make Pixabay queries narrower without making them more relevant.\nconst qualifiers = new Set(['futuristic','towering','vivid','cinematic','detailed','beautiful',\n  'stunning','dramatic','modern','large','small','tall','bright','dark','overcast','distant',\n  'casting','displaying','showing','featuring','surrounded','filled','set','wide','close']);\n\nconst pickWords = (text, limit) => text.toLowerCase()\n  .replace(/[^a-z0-9 ]/g, ' ')\n  .split(/\\s+/)\n  .filter(w => w.length > 3 && !stopWords.has(w) && !qualifiers.has(w))\n  .slice(0, limit)\n  .join(' ');\n\n// Three terms is the sweet spot: Pixabay ANDs them, so more terms means fewer hits\n// and a needless fall through to DALL-E.\nlet query = pickWords(imageDescription, 3);\nif (!query) query = pickWords(title, 3);\nif (!query) query = 'editorial news';\n\nreturn [{ json: { chatId, query, imageDescription } }];"
+      },
+      "id": "bbc58c36-9653-44c9-8f6f-694efdaa17d3",
+      "name": "Build Pixabay Query",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -512,
+        976
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://pixabay.com/api/?key=REDACTED_API_KEY&q={{ encodeURIComponent($json.query) }}&image_type=photo&orientation=horizontal&min_width=1280&safesearch=true&per_page=10&order=popular",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "4bf3b81b-90c6-4d9e-9df7-c1fb0b991287",
+      "name": "Fetch Pixabay API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -288,
+        976
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const chatId = (()=>{try{return $('Telegram Trigger').item.json.message.chat.id}catch(e){return $getWorkflowStaticData('global')['currentChatId']}})();\nconst response = $input.item.json;\n\nlet imageUrl = null;\n\nif (response && response.hits && response.hits.length > 0) {\n  const hit = response.hits.find(function(h) { return h.largeImageURL || h.webformatURL; });\n  if (hit) {\n    imageUrl = hit.largeImageURL || hit.webformatURL;\n  }\n}\n\nreturn [{ json: { chatId: chatId, imageUrl: imageUrl, hasPixabay: !!imageUrl } }];"
+      },
+      "id": "409c4e15-ad24-47bc-b35b-83e080c9cbca",
+      "name": "Parse Pixabay Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -64,
+        976
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-pix-check",
+              "leftValue": "={{ $json.hasPixabay }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "1c77b165-4e36-4659-8b6d-ece1fd84b724",
+      "name": "Has Pixabay Image?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        0,
+        576
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Pixabay image found — pass URL through as JSON (no binary yet)\n// Binary download happens after Merge to avoid binary data being stripped\nreturn [{ json: { imageUrl: $json.imageUrl, source: 'pixabay' } }];"
+      },
+      "id": "d34c548a-fdcc-44a7-95e9-c1ce79ef6abc",
+      "name": "Set Pixabay URL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        384,
+        848
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "926f1c00-0565-464c-a5dc-b0bd20f4a293",
+      "name": "Merge Image Paths",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2.1,
+      "position": [
+        640,
+        976
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// DALL-E image generated — extract URL as JSON (no binary yet)\n// Binary download happens after Merge\nconst url = $json.data && $json.data[0] ? $json.data[0].url : null;\nif (!url) throw new Error('DALL-E returned no image URL');\nreturn [{ json: { imageUrl: url, source: 'dalle' } }];"
+      },
+      "id": "8a170d7c-2dfa-435f-82ed-d005fd423bad",
+      "name": "Extract DALL-E URL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        384,
+        1104
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const tagNames = ($json.tags || '')\n  .split(',')\n  .map(function(t) { return t.trim(); })\n  .filter(function(t) { return t.length > 1; })\n  .slice(0, 8);\n\nconst chatId = $json.chatId;\n\n// Save full post metadata to static data\n// so it can be retrieved after the tag loop\nconst staticData = $getWorkflowStaticData('global');\nstaticData['pendingPost_' + chatId] = {\n  chatId: chatId,\n  title: $json.title,\n  content: $json.content,\n  slug: $json.slug,\n  excerpt: $json.excerpt,\n  wpMediaId: $json.wpMediaId || 0,\n  categoryId: $json.categoryId || 1,\n  isPublish: $json.isPublish || false,\n  totalTags: tagNames.length,\n  collectedTagIds: []\n};\n\n// Output one item per tag name so HTTP Request runs for each\nif (tagNames.length === 0) {\n  // No tags — pass through with empty tagIds\n  return [{ json: {\n    chatId: chatId,\n    tagName: null,\n    noTags: true,\n    totalTags: 0\n  }}];\n}\n\nreturn tagNames.map(function(name) {\n  return { json: { chatId: chatId, tagName: name, noTags: false, totalTags: tagNames.length } };\n});"
+      },
+      "id": "6b25b682-e9e6-4ded-b0ea-1de59c297660",
+      "name": "Resolve Tag Names",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -800,
+        576
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-tags-check",
+              "leftValue": "={{ $json.noTags }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "7ba523ae-15df-4e64-af70-84cf4787cb49",
+      "name": "Has Tags?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -544,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://promomag.co.uk/wp-json/wp/v2/tags",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"name\": \"{{ $json.tagName }}\" }",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "43320db1-1d7a-4058-a7d6-4ff4779109e7",
+      "name": "Create WP Tag",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -320,
+        144
+      ],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "jkmcRGFCJbTsbiYb",
+          "name": "n8n PromoMag"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const chatId = $json.chatId;\nconst staticData = $getWorkflowStaticData('global');\nconst pending = staticData['pendingPost_' + chatId];\n\nif (!pending) {\n  return [{ json: {\n    chatId: chatId, title: $json.title || '', content: $json.content || '',\n    slug: $json.slug || '', excerpt: $json.excerpt || '',\n    wpMediaId: $json.wpMediaId || 0, categoryId: $json.categoryId || 1,\n    tagIds: [], isPublish: $json.isPublish || false, tagNote: ''\n  }}];\n}\n\ndelete staticData['pendingPost_' + chatId];\n\nreturn [{ json: {\n  chatId: pending.chatId,\n  title: pending.title,\n  content: pending.content,\n  slug: pending.slug,\n  excerpt: pending.excerpt,\n  wpMediaId: pending.wpMediaId || 0,\n  categoryId: pending.categoryId || 1,\n  tagIds: [],\n  isPublish: pending.isPublish || false,\n  tagNote: ''\n}}];"
+      },
+      "id": "5f17ecad-9b5a-4986-a994-5af8f7cf7faa",
+      "name": "No Tags Passthrough",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -320,
+        304
+      ],
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {},
+      "id": "61231e22-2d10-4951-9bff-066dcbc7c220",
+      "name": "Merge Before WordPress",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2.1,
+      "position": [
+        560,
+        224
+      ],
+      "alwaysOutputData": false,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Create WP Tag runs with fullResponse, so a new tag arrives as { body: { id }, statusCode }\n// and an existing one as a 400 whose term_id is buried in a stringified error message.\n// Reading $json.id alone returned null for both, so every post published with zero tags.\nconst staticData = $getWorkflowStaticData('global');\nconst chatId = staticData['currentChatId'] || $json.chatId || null;\n\nconst j = $json || {};\nconst b = j.body || j;\n\nlet tagId = b.id || (b.data && b.data.term_id) || null;\n\nif (!tagId && j.error) {\n  const raw = typeof j.error === 'string'\n    ? j.error\n    : (j.error.message || JSON.stringify(j.error));\n  const m = String(raw).match(/\"term_id\"\\s*:\\s*(\\d+)/);\n  if (m) tagId = parseInt(m[1], 10);\n}\n\nreturn [{ json: { chatId, tagId } }];"
+      },
+      "id": "0201d525-186d-4497-88b2-806a7240fa97",
+      "name": "Extract Tag ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "destinationFieldName": "tagItems",
+        "options": {}
+      },
+      "id": "213bb99e-0ce3-4886-ae79-c1dff7c73de6",
+      "name": "Aggregate Tag IDs",
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        224,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nconst chatId = staticData['currentChatId'];\nconst pending = staticData['pendingPost_' + chatId];\n\n// Extract tag IDs from aggregated items\nconst tagItems = $json.tagItems || [];\nconst tagIds = tagItems\n  .map(function(item) { return item.tagId; })\n  .filter(Boolean);\n\nif (!pending) {\n  // Fallback — shouldn't happen but handle gracefully\n  return [{ json: {\n    chatId: chatId || '',\n    title: '', content: '', slug: '', excerpt: '',\n    wpMediaId: 0, categoryId: 1,\n    tagIds: tagIds,\n    isPublish: false,\n    tagNote: 'Warning: pending post data not found'\n  }}];\n}\n\n// Clean up\ndelete staticData['pendingPost_' + chatId];\n\nreturn [{ json: {\n  chatId: pending.chatId,\n  title: pending.title,\n  content: pending.content,\n  slug: pending.slug,\n  excerpt: pending.excerpt,\n  wpMediaId: pending.wpMediaId || 0,\n  categoryId: pending.categoryId || 1,\n  tagIds: tagIds,\n  isPublish: pending.isPublish || false,\n  tagNote: tagIds.length > 0 ? '' : 'Tags could not be added'\n}}];"
+      },
+      "id": "dc131b06-d6ee-45c0-9ec1-6a43c5b8f182",
+      "name": "Build Post from Tags",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "agent": "conversationalAgent",
+        "promptType": "define",
+        "text": "=Category: {{ $json.category || 'general news' }}\n\nInitial Google News headlines, as a starting point only:\n\n{{ $json.researchInput }}\n\nNow call Google_News_Search_Tool 2-3 times with targeted queries based on these headlines and the category, then return the five TOPIC blocks in the required format.",
+        "options": {
+          "systemMessage": "You are a news research assistant for PromoMag.co.uk, a UK current affairs magazine.\n\nYou have access to a tool named Google_News_Search_Tool that queries Google News RSS in real time. You MUST use this tool to find real, current news before responding. Do not rely on your training data for topic suggestions or article facts — always search first.\n\nRESEARCH PROCESS:\n1. Read any headlines already provided to you as context\n2. Call Google_News_Search_Tool 3-4 times with targeted queries to find the most relevant and recent articles. Choose queries that are specific (e.g. \"UK Labour leadership race September 2026\", \"XRP crypto bill US Senate 2026\", \"Bank of England AI regulation 2026\")\n3. Parse the RSS results to extract: headline, source, publication date, and description\n4. Identify the 5 most compelling, newsworthy topics from your combined research\n5. For each topic, extract only facts that appear in the search results — never invent details\n\nSEARCH BUDGET: no more than six tool calls in total across the whole brief. Make each query count — pick the subject and the qualifier deliberately rather than searching broadly and hoping. Exceeding the budget risks exhausting the OpenAI rate limit and losing the entire run.\n\nFIVE DISTINCT STORIES — the supplied headlines cluster heavily around two or three events, and returning the same event under different titles wastes four of the five slots:\n- Each TOPIC must be a different underlying event, decision or dispute. Two topics covering the same announcement from different angles count as one.\n- If your first search yields only two or three distinct stories, use a remaining search on a different sub-subject within the category until you have five.\n- Never fill a slot with a story you cannot support. If a topic's own Key Facts would say that details are unclear, not yet announced or awaited, it is not a story — search for a different one.\n\nKEY FACTS DEPTH — this field is passed to the writer as the sole basis for a full-length article, and a thin dossier is what makes the writer invent. Treat this as the hardest requirement in the brief:\n- Give at least SIX separate factual items per topic, each on its own line prefixed with \"- \".\n- Every item must carry at least one concrete token, or it does not count towards the six:\n  * a figure or amount (money, percentage, count, size, duration)\n  * a specific date or named time period\n  * a named person together with their role or title\n  * a named organisation other than the subject of the topic itself\n  * a phrase quoted verbatim from the source, in quotation marks\n- These do NOT count and must not be listed at all: restatements of the Title; restatements of the Significance text; and vague significance claims of the form \"the decision acknowledges its national importance\", \"the move is seen as a milestone\", \"the announcement has drawn attention\". If an item would still be true with the subject swapped for any other subject in the category, delete it.\n- Prioritise the specific mechanism or decision at issue: what exactly was decided, by whom, under what instrument, taking effect when.\n- Attribute each item to the outlet it came from, in square brackets at the end of the line.\n- If your searches genuinely support fewer than six qualifying items on a topic, drop that topic and use a different story. A topic that cannot supply six concrete facts is not a topic.\n\nOUTPUT FORMAT — return EXACTLY this structure, no preamble. The TOPIC headers are parsed downstream and must appear verbatim:\n\nTOPIC 1\nTitle: [clear topic title suitable as an article subject]\nSignificance: [why newsworthy right now, 1-2 sentences grounded in what you found]\nKey Facts:\n- [fact carrying a figure] [Source]\n- [fact carrying a date] [Source]\n- [fact naming a person and their role] [Source]\n- [fact naming an organisation] [Source]\n- [verbatim quoted phrase with who said it] [Source]\n- [the specific mechanism or decision at issue] [Source]\nSources: [exact source names from the RSS results]\nDate: [publication date from the RSS results]\n\nTOPIC 2\n[same format]\n\nTOPIC 3\n[same format]\n\nTOPIC 4\n[same format]\n\nTOPIC 5\n[same format]\n\nSTRICT RULES:\n- Always return all five TOPIC blocks, using the literal words TOPIC 1 through TOPIC 5\n- Keep Title:, Significance:, Key Facts:, Sources: and Date: as line-prefixed fields exactly as shown\n- Six or more Key Facts lines per topic, every one carrying a concrete token\n- Only include facts that appeared in the search results\n- Include the source name and date for every fact\n- If a search returns no results, try a different query within the search budget\n- Never say you cannot search — you have Google_News_Search_Tool, use it"
+        }
+      },
+      "id": "dd281471-0ddd-4978-a0c6-378270cc9a3e",
+      "name": "Research Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        768,
+        544
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o",
+        "options": {
+          "maxTokens": 4000,
+          "temperature": 0.3
+        }
+      },
+      "id": "ed0cbf2e-71ec-41f5-988f-7434e3a4fa87",
+      "name": "Research LLM",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.1,
+      "position": [
+        832,
+        816
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "hi9jgbWx4TTKkRVO",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const chatId = (()=>{try{return $('Telegram Trigger').item.json.message.chat.id}catch(e){return $getWorkflowStaticData('global')['currentChatId']}})();\nconst sd = $getWorkflowStaticData('global');\nconst currentDate = sd['researchDate_' + chatId]\n  || new Date().toLocaleDateString('en-GB', {weekday:'long', day:'numeric', month:'long', year:'numeric'});\nconst originalText = (()=>{try{return $('Telegram Trigger').item.json.message.text}catch(e){return sd['currentPromptText']||''}})();\n\n// Research Agent has onError=continueErrorOutput, but n8n hands a failed agent item back on\n// output 0, so this node also receives agent failures. A failure has no .output at all, which\n// previously stored '' as the brief - indistinguishable downstream from a real empty result.\nconst researchOutput = String($json.output || '').trim();\nconst hasTopics = /\\bTOPIC\\s+\\d+\\b/i.test(researchOutput);\nconst agentError = $json.error\n  ? String($json.error.message || $json.error).slice(0, 300)\n  : '';\n\nlet researchOk = false;\n\nif (hasTopics) {\n  sd['researchBrief_' + chatId] = researchOutput;\n  researchOk = true;\n} else {\n  // Store nothing rather than something empty or malformed. A stale or blank brief here is\n  // what made Send Topic List fall through to raw RSS headlines and render one bogus topic.\n  delete sd['researchBrief_' + chatId];\n  console.log('Parse Research Output: no TOPIC blocks. length=' + researchOutput.length + ' error=' + agentError);\n}\n\nlet promptText = '[CURRENT DATE: ' + currentDate + ']\\n\\n' + originalText;\nif (researchOk) {\n  promptText += '\\n\\n[LIVE RESEARCH BRIEF \\u2014 Researched from real Google News headlines. '\n    + 'Every topic suggestion and article fact must come from this research. '\n    + 'Do not invent details not present here:]\\n\\n'\n    + researchOutput;\n}\n\nreturn [{ json: { promptText, chatId, researchOk, researchError: agentError } }];"
+      },
+      "id": "a883633f-f7d0-4aa8-a52b-d2aea5b57a33",
+      "name": "Parse Research Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1328,
+        688
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const chatId = (()=>{try{return $('Telegram Trigger').item.json.message.chat.id}catch(e){return $getWorkflowStaticData('global')['currentChatId']}})();\nconst staticData = $getWorkflowStaticData('global');\nconst currentDate = staticData['researchDate_' + chatId] || new Date().toLocaleDateString('en-GB', {weekday:'long',day:'numeric',month:'long',year:'numeric'});\nconst originalText = (()=>{try{return $('Telegram Trigger').item.json.message.text}catch(e){return $getWorkflowStaticData('global')['currentPromptText']||''}})();\nconst researchInput = staticData['researchInput_' + chatId] || '';\n\n// Fall back to raw RSS headlines if Research Agent failed\nconst promptText = '[CURRENT DATE: ' + currentDate + ']\\n\\n'\n  + originalText\n  + (researchInput ? '\\n\\n[LIVE NEWS CONTEXT — Real headlines from Google News:]\\n\\n' + researchInput : '');\n\nreturn [{ json: { promptText } }];"
+      },
+      "id": "c9f9f9ad-08d6-4eb2-a2ad-25509d7a72cf",
+      "name": "Research Agent Fallback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1328,
+        800
+      ]
+    },
+    {
+      "parameters": {
+        "maxLength": 2500,
+        "method": "GET",
+        "optimizeResponse": true,
+        "placeholderDefinitions": {
+          "values": [
+            {
+              "description": "The news search query. Be specific: subject plus a qualifier plus the month and year.",
+              "name": "query",
+              "type": "string"
+            }
+          ]
+        },
+        "responseType": "text",
+        "toolDescription": "Search Google News for recent articles on a subject. Pass one focused search query, for example \"UK Labour leadership race September 2026\". Returns an RSS feed containing headlines, source names, publication dates and short descriptions.",
+        "truncateResponse": true,
+        "url": "https://news.google.com/rss/search?q={query}&hl=en-GB&gl=GB&ceid=GB:en"
+      },
+      "id": "a27b1b3c-3e1f-4564-a1be-72106d62a98a",
+      "name": "Google News Search Tool",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [
+        1088,
+        848
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        -176,
+        288
+      ],
+      "id": "3d6ec66d-ebd6-41c8-9c12-190cfbb24001",
+      "name": "When chat message received",
+      "webhookId": "cb38c0fc-02f5-4289-9176-79563451a1ec"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 7 * * *"
+            }
+          ]
+        }
+      },
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -720,
+        1648
+      ],
+      "id": "6b203469-1c49-41df-98ce-3846edf4b520"
+    },
+    {
+      "parameters": {
+        "jsCode": "// SINGLE SOURCE OF TRUTH for the scheduled run's category. Change it here only.\n// PromoMag WP category IDs: business-finance 2, entertainment-arts 105,\n// environment-nature 162, science-technology 296, politics-global 5325.\nconst OWNER_CHAT_ID = 8271099427;\nconst CATEGORY = {\n  slug:  'entertainment-arts',\n  label: 'Entertainment',\n  word:  'entertainment',\n  query: 'entertainment OR arts OR culture news',\n  wpId:  105\n};\n\nconst sd = $getWorkflowStaticData('global');\nsd['currentChatId']     = OWNER_CHAT_ID;\nsd['currentPromptText'] = CATEGORY.word;\nsd['currentNewsQuery']  = CATEGORY.query;\nsd['scheduledCategory'] = CATEGORY;\nsd['researchDate_' + OWNER_CHAT_ID] = new Date().toLocaleDateString('en-GB',\n  {weekday:'long',day:'numeric',month:'long',year:'numeric'});\n\nreturn [{ json: {\n  chatId: OWNER_CHAT_ID,\n  isScheduled: true,\n  isCategory: true,\n  newsQuery: CATEGORY.query,\n  promptText: CATEGORY.word,\n  categorySlug: CATEGORY.slug,\n  categoryLabel: CATEGORY.label,\n  categoryId: CATEGORY.wpId,\n  statusMsg: 'Scheduled run started'\n}}];"
+      },
+      "name": "Scheduled Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -496,
+        1648
+      ],
+      "id": "56437063-a274-406a-bc32-90e6f76ba13a"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "sched",
+              "leftValue": "={{ $json.isScheduled }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Is Scheduled Run?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        944,
+        848
+      ],
+      "id": "722f76ee-ed6e-4c60-946f-485d475d1d76"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Scheduled runs pick TOPIC 1 from the Research Agent brief and go straight to drafting.\nconst sd = $getWorkflowStaticData('global');\nconst cfg = (()=>{ try { return $('Scheduled Config').first().json; } catch(e) { return {}; } })();\nconst cat = sd['scheduledCategory'] || {};\nconst label = cfg.categoryLabel || cat.label || 'Entertainment';\n\nconst chatId = cfg.chatId || sd['currentChatId'];\nconst brief  = sd['researchBrief_' + chatId] || '';\nif (!brief.trim()) throw new Error('No research brief in static data - Research Agent produced nothing.');\n\n// Split on TOPIC n headers and keep the first\nconst parts = brief.split(/\\bTOPIC\\s+\\d+\\b/i).map(s => s.trim()).filter(Boolean);\nconst topic1 = parts[0] || brief;\nconst titleMatch = topic1.match(/Title:\\s*(.+)/i);\n\n// Hard-fail on a brief that matched TOPIC n but carries no usable fields. When gpt-4o-mini\n// returned the brief as JSON, the key \"TOPIC 1\" satisfied the marker test while the split left\n// parts[0] as the two characters before it. The old fallback title plus `parts[idx] || brief`\n// sent a one-character dossier to the writer, which invented an entire article - including a\n// fabricated RIAA sales statistic. Silence here is worse than a failed run.\nif (!titleMatch || topic1.length < 80) {\n  throw new Error('Research brief has TOPIC markers but no parsable Title field - the agent drifted from the required plain-text format. Brief starts: ' + brief.slice(0, 120));\n}\n\nconst topicTitle = titleMatch[1].trim();\n\nsd['scheduledTopicTitle'] = topicTitle;\n\nconst promptText =\n  '[CURRENT DATE: ' + (sd['researchDate_' + chatId] || new Date().toDateString()) + ']\\n\\n' +\n  'Write the complete article now for the topic below. Do not ask questions, do not send a table of ' +\n  'contents, do not acknowledge. Return the finished article starting with [BLOCK:METADATA].\\n\\n' +\n  'Category: ' + label + '\\n' +\n  'Selected topic: ' + topicTitle + '\\n\\n' +\n  '[LIVE RESEARCH BRIEF - every fact must come from here. Do not invent details:]\\n\\n' + topic1;\n\nreturn [{ json: { promptText, chatId, topicTitle } }];"
+      },
+      "name": "Auto-Select Top Topic",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1152,
+        1648
+      ],
+      "id": "114becfa-442a-4eef-b687-8e5039d20e06"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.promptText }}",
+        "options": {
+          "systemMessage": "You are the PromoMag.co.uk feature writer. Return ONLY the finished article in the exact block format below. No acknowledgements, no questions, no headings, no ## markers.\n\nSOURCE DISCIPLINE — this governs everything else:\n- The research dossier supplied in the prompt is your only permitted source of fact. Names, dates, figures, organisations, positions, quotations and sequence of events must all appear in it.\n- You may supply connective reasoning, argument and significance. You may not supply what someone said before, what they have historically believed, how the public \"initially\" reacted, prior agreements, or any trend claim about the past. If it reads like a fact and it is not in the dossier, cut it.\n- Do not state a count of anything unless the dossier states that count. If the dossier lists items, list them or say \"the signatories\" — do not tally them yourself. This rule governs the article body. The Coverage line in METADATA is the one place you must count, and there you are counting the dossier and your own paragraphs, not the world.\n- Do not write around a gap with a general statement. If the dossier does not support a point, leave the point out.\n- Never restate a fact in order to fill space. Every paragraph must contain information absent from every earlier paragraph.\n\nLENGTH — structural, not word-counted:\n- Write 9 to 11 paragraphs of roughly 160-200 words each.\n- Every paragraph must be anchored by at least one concrete item from the dossier: a named person, a named organisation, a figure, a date, a quotation, or a specific document or event.\n- If the dossier cannot support 9 anchored paragraphs, write only as many as it can and stop. A grounded 900-word article is correct output; a padded 1,600-word article is a failure.\n\nCOVERAGE — mandatory, no exceptions:\n- Every article carries a Coverage: line inside [BLOCK:METADATA], whether the dossier was rich or thin. Output without that line is malformed.\n- Use exactly this one-line shape:\nCoverage: used N of M dossier facts; P of Q paragraphs anchored; gaps: [what the dossier did not support, or \"none\"]\n- M is the number of separate factual items in the dossier. Q is the number of paragraphs you actually wrote. N and P are your own count.\n- A paragraph counts as anchored only if it carries a person, organisation, figure, date, quotation, document or event that appears in the dossier. Your own connective reasoning is not an anchor, and neither is a fact already anchored in an earlier paragraph.\n- If P is lower than Q, name the unanchored paragraphs in the gaps field and say what the dossier lacked. Do not adjust the numbers to look better — an accurate low count is correct output, an inflated one is a failure.\n\nVOICE:\n- Wall Street Journal register. Continuous narrative, no section headings, no subheadings, no bullet points.\n- Open on the most specific thing in the dossier: a named person doing a dated thing, or a figure. Never on a category or a trend.\n- Take a clear editorial position and argue it from the evidence. Do not balance both sides equally.\n- Attribute as [Source Name, Month Year] where the dossier gives a source. Do not link to news articles.\n- Close on a specific, testable claim about what happens next — a named actor, a decision point, or a date to watch.\n\nBANNED MOVES — these matter more than the phrase list:\n- The abstract summary sentence: any sentence whose subject is \"the debate\", \"the conversation\", \"the movement\", \"the industry\", \"the challenge\", \"the path forward\", \"the journey ahead\", \"the future of X\".\n- The consensus sentence: \"there is a growing consensus / recognition / acknowledgment that...\".\n- The both-sides close: \"balancing progress with prudence\", \"risks and rewards\", \"enhance rather than disrupt\".\n- The watching-world sentence: \"as the world watches\", \"all eyes will be on\", \"will be closely scrutinised\".\n- Empty short sentences used only for rhythm. A short sentence is permitted only when it carries a fact or a judgement.\n- Any sentence that would remain true if this article's subject were swapped for a different subject in the same field. Delete it.\n\nBANNED PHRASES — never use: \"in conclusion\", \"ultimately\", \"it remains to be seen\", \"only time will tell\", \"the implications are significant\", \"the implications are profound\", \"the stakes are high\", \"in a world where\", \"in recent years\", \"in past years\", \"the choices made today\", \"for the greater good\", \"navigating this complex terrain\", \"at the forefront\", \"in the coming months\".\n\nOUTPUT FORMAT — reproduce these markers exactly, including every closing [/BLOCK] tag. A missing [/BLOCK] breaks the workflow:\n\n[BLOCK:METADATA]\nTitle: [SEO-optimised title]\nAuthor: By PromoMag [Category] Desk | [Month Year from CURRENT DATE]\nMeta: [meta description, roughly 150 characters]\nSlug: [url-slug-here]\nTags: [tag1, tag2, tag3, tag4, tag5]\nImage: [a vivid scene description for a photograph — objects, landscapes, architecture or concepts, no people and no faces. Never a filename.]\nCoverage: used N of M dossier facts; P of Q paragraphs anchored; gaps: [what the dossier did not support, or \"none\"]\n[/BLOCK]\n\n[BLOCK:ARTICLE]\n[The article. Continuous prose only.]\n[/BLOCK]\n\n[BLOCK:SEO]\nArticle drafted and saved.\n[/BLOCK]"
+        }
+      },
+      "name": "Write Scheduled Article",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        1376,
+        1648
+      ],
+      "id": "090cc69b-66f1-42cd-925f-4e0176394e78",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const sd = $getWorkflowStaticData('global');\nconst cfg = (()=>{ try { return $('Scheduled Config').first().json; } catch(e) { return {}; } })();\nconst cat = sd['scheduledCategory'] || {};\nconst chatId = cfg.chatId || sd['currentChatId'];\nconst output = $input.first().json.output || '';\n\nconst block = (tag) => {\n  const open='[BLOCK:'+tag+']', close='[/BLOCK]';\n  const s=output.indexOf(open); if (s===-1) return '';\n  const cs=s+open.length, e=output.indexOf(close, cs);\n  return (e===-1?output.slice(cs):output.slice(cs,e)).trim();\n};\nconst field = (b,f) => { if(!b) return ''; for (const l of b.split('\\n')) if (l.startsWith(f+': ')) return l.slice(f.length+2).trim(); return ''; };\n\nconst meta=block('METADATA'), body=block('ARTICLE'), seo=block('SEO');\nif (!meta || !body) throw new Error('Scheduled draft missing [BLOCK:METADATA] or [BLOCK:ARTICLE].');\n\nconst title = field(meta,'Title') || sd['scheduledTopicTitle'] || 'Untitled';\nconst html  = body.split('\\n').filter(l=>l.trim()).map(l=>'<p>'+l.trim()+'</p>').join('\\n');\n\n// The writing agent emits Slug / Meta / Tags / Image inside [BLOCK:METADATA], not [BLOCK:SEO].\nconst article = {\n  title,\n  content: html,\n  slug:    field(meta,'Slug') || title.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,60),\n  excerpt: field(meta,'Meta') || field(meta,'Excerpt') || field(seo,'Excerpt') || '',\n  tags:    field(meta,'Tags') || field(seo,'Tags') || '',\n  imageDescription: field(meta,'Image') || '',\n  category:      cfg.categorySlug  || cat.slug  || 'entertainment-arts',\n  categoryLabel: cfg.categoryLabel || cat.label || 'Entertainment',\n  categoryId:    cfg.categoryId    || cat.wpId  || 105,\n  wpMediaId: 0\n};\n\n// Isolated key: a scheduled draft must not overwrite an interactive session's article_<chatId>.\nsd['schedArticle_' + chatId] = article;\n\nreturn [{ json: { ...article, chatId, preview: body.slice(0,700) } }];"
+      },
+      "name": "Parse Scheduled Blocks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1600,
+        1648
+      ],
+      "id": "13f36bdd-f9fe-48c5-8e57-549a6e63a59b"
+    },
+    {
+      "parameters": {
+        "jsCode": "const stop=new Set(['the','a','an','of','in','on','at','to','for','with','and','or','but','is','are','was','were','as','by','from','that','this','it','its']);\nconst words=($json.title||'').toLowerCase().replace(/[^a-z0-9 ]/g,' ').split(/\\s+/).filter(w=>w.length>3&&!stop.has(w));\nreturn [{ json: { ...$json, query: (words.slice(0,3).join(' ') || 'entertainment') } }];"
+      },
+      "name": "Sched Pixabay Query",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1824,
+        1648
+      ],
+      "id": "0708d845-b7b1-4147-8dc8-62f12dce50a7"
+    },
+    {
+      "parameters": {
+        "url": "=https://pixabay.com/api/?key=REDACTED_API_KEY&q={{ encodeURIComponent($json.query) }}&image_type=photo&orientation=horizontal&min_width=1280&safesearch=true&per_page=10&order=popular",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "name": "Sched Fetch Pixabay",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2032,
+        1648
+      ],
+      "id": "49e1fc03-8f08-4937-a868-2f09086ffbfa",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const sd=$getWorkflowStaticData('global');\nconst chatId=sd['currentChatId'];\nconst art=sd['schedArticle_'+chatId]||{};\nconst hits=$input.first().json.hits||[];\nreturn [{ json: { ...art, chatId, imageUrl: hits.length ? (hits[0].largeImageURL||hits[0].webformatURL) : '' } }];"
+      },
+      "name": "Sched Pick Image",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2256,
+        1648
+      ],
+      "id": "3d4f6658-fdf2-4eb8-acdf-29510f3c88d1"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.imageUrl }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "imageData"
+            }
+          }
+        }
+      },
+      "name": "Sched Download Image",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2480,
+        1648
+      ],
+      "id": "f728baa2-996c-4067-8a9b-427713b1aae2",
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://promomag.co.uk/wp-json/wp/v2/media",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Disposition",
+              "value": "=attachment; filename=\"promomag-scheduled-{{ Date.now() }}.jpg\""
+            },
+            {
+              "name": "Content-Type",
+              "value": "image/jpeg"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "imageData",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "name": "Sched Upload Media",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2704,
+        1648
+      ],
+      "id": "ed5108ea-f5ef-4c3b-887f-ce7e804022de",
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "jkmcRGFCJbTsbiYb",
+          "name": "n8n PromoMag"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const sd=$getWorkflowStaticData('global');\nconst chatId=sd['currentChatId'];\nconst art=sd['schedArticle_'+chatId]||{};\nlet mediaId=0;\ntry { const b=$input.first().json.body||$input.first().json; mediaId=b.id||0; } catch(e) {}\nart.wpMediaId=mediaId;\nsd['schedArticle_'+chatId]=art;\n\n// The Wait node's resume URL carries no authentication, so a forwarded Telegram message or a\n// screenshot would let anyone publish. Mint a single-use token and require it on resume.\nconst approvalToken = Array.from({length:4},()=>Math.random().toString(36).slice(2,10)).join('');\nsd['schedApprovalToken_'+chatId] = approvalToken;\n\nreturn [{ json: { ...art, chatId, approvalToken } }];"
+      },
+      "name": "Sched Store Media",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2912,
+        1648
+      ],
+      "id": "e71da2a9-d395-449b-9cb7-2efa62156efa"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "=📰 *Scheduled draft ready — {{ $json.categoryLabel || 'Entertainment' }}*\n\n*{{ $json.title }}*\n\n{{ ($json.excerpt || '').slice(0,300) }}\n\n⚠️ Nothing has been posted to PromoMag yet. Tap *Publish now* to go live, or *Let me tailor it* to keep the draft and rework it in chat. No response within 6 hours and the draft is discarded.",
+        "replyMarkup": "inlineKeyboard",
+        "inlineKeyboard": {
+          "rows": [
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "✅ Publish now",
+                    "additionalFields": {
+                      "url": "={{ $execution.resumeUrl }}?action=publish&token={{ $json.approvalToken }}"
+                    }
+                  },
+                  {
+                    "text": "✏️ Let me tailor it",
+                    "additionalFields": {
+                      "url": "={{ $execution.resumeUrl }}?action=tailor&token={{ $json.approvalToken }}"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "Markdown"
+        }
+      },
+      "name": "Send Approval Request",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        3136,
+        1648
+      ],
+      "id": "1d70a2c3-e382-45b0-b715-5b95fc60a91e",
+      "webhookId": "68185624-bad4-4980-8b35-8aa0f6dadd7b",
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "telegramApi": {
+          "id": "F7kV4EHRCT4GkYho",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resume": "webhook",
+        "limitWaitTime": true,
+        "resumeAmount": 6,
+        "options": {}
+      },
+      "name": "Wait for Approval",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        3360,
+        1648
+      ],
+      "id": "a37795cd-4f60-4140-8134-e9f2e430f518",
+      "webhookId": "promomag-scheduled-approval"
+    },
+    {
+      "parameters": {
+        "jsCode": "const sd=$getWorkflowStaticData('global');\nconst chatId=sd['currentChatId'];\nconst art=sd['schedArticle_'+chatId]||{};\nconst j=$input.first().json||{};\nconst q=j.query||{};\n\n// Prefer the token from this execution's own run data; fall back to static data.\nconst expected=(()=>{ try { return $('Sched Store Media').first().json.approvalToken || ''; } catch(e) { return sd['schedApprovalToken_'+chatId]||''; } })();\nconst tokenOk = !!expected && String(q.token||'') === expected;\n\n// A missing or wrong token is treated exactly like no approval at all: the draft is dropped.\nconst action = tokenOk ? String(q.action||'').toLowerCase() : '';\nconst approved = (action==='publish' || action==='tailor');\n\nif (action==='tailor') { sd['article_'+chatId] = { ...art }; }\nif (approved) {\n  delete sd['schedArticle_'+chatId];\n  sd['scheduledRun']=false;\n}\n// Single use either way, so a replayed link cannot publish twice.\ndelete sd['schedApprovalToken_'+chatId];\n\nreturn [{ json: { ...art, chatId, action, approved, isPublish: action==='publish', tokenOk } }];"
+      },
+      "name": "Approval Router",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3584,
+        1648
+      ],
+      "id": "5f6e3829-06e3-4788-9286-ca2f1b86c0a8"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "appr",
+              "leftValue": "={{ $json.approved }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Approved?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        3792,
+        1648
+      ],
+      "id": "80c015e3-37e0-4516-adb5-0d5a5518121f"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "pub",
+              "leftValue": "={{ $json.action }}",
+              "rightValue": "publish",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Publish or Tailor?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        4016,
+        1456
+      ],
+      "id": "9d93afcd-cf0f-49d7-8aeb-bec3ab3e6669"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://promomag.co.uk/wp-json/wp/v2/posts",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={\n  \"title\": {{ JSON.stringify($json.title) }},\n  \"content\": {{ JSON.stringify($json.content) }},\n  \"status\": \"publish\",\n  \"slug\": {{ JSON.stringify($json.slug) }},\n  \"excerpt\": {{ JSON.stringify($json.excerpt) }},\n  \"featured_media\": {{ $json.wpMediaId || 0 }},\n  \"categories\": [{{ $json.categoryId || 105 }}],\n  \"tags\": {{ JSON.stringify($json.tagIds || []) }}\n}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "name": "Sched Post to WordPress",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        5504,
+        1200
+      ],
+      "id": "67fe2090-ebe3-48be-8406-7cc1e8f0cfd7",
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "jkmcRGFCJbTsbiYb",
+          "name": "n8n PromoMag"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Approval Router').first().json.chatId }}",
+        "text": "=✅ *Published to PromoMag*\n\n{{ $('Approval Router').first().json.title }}\n\n{{ $json.body.link }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "Markdown"
+        }
+      },
+      "name": "Send Published Confirmation",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        5712,
+        1120
+      ],
+      "id": "af460ad4-034e-4059-a258-3bb57a30c665",
+      "webhookId": "ece3fecb-4bd3-4715-8bb8-73631ba4bfe7",
+      "credentials": {
+        "telegramApi": {
+          "id": "F7kV4EHRCT4GkYho",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Approval Router').first().json.chatId }}",
+        "text": "=⚠️ *Publish failed* — the draft is still stored. Reply *post to wordpress* to retry.\n\n`{{ JSON.stringify($json.error || $json).slice(0,300) }}`",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "Markdown"
+        }
+      },
+      "name": "Send Publish Error",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        5712,
+        1280
+      ],
+      "id": "a54b47e5-04e9-4fd6-b3b2-d4ec5520d1ca",
+      "webhookId": "21aab26b-8a10-4075-a468-a84834cf93e5",
+      "credentials": {
+        "telegramApi": {
+          "id": "F7kV4EHRCT4GkYho",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "=✏️ *Draft kept for editing*\n\n*{{ $json.title }}*\n\nIt is stored against this chat. Message me normally to rework it, or send *publish* when you are happy.",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "Markdown"
+        }
+      },
+      "name": "Send Tailor Handoff",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        4240,
+        1584
+      ],
+      "id": "ab829cde-d1cd-49da-9ae6-db276d929fa1",
+      "webhookId": "9f4d88be-ce9a-4dd2-bd00-02fddaa4c8bc",
+      "credentials": {
+        "telegramApi": {
+          "id": "F7kV4EHRCT4GkYho",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const sd=$getWorkflowStaticData('global');\nconst chatId=sd['currentChatId'];\nconst art=sd['schedArticle_'+chatId]||{};\nconst title=art.title||'(untitled)';\n// Clear only the scheduled draft - leave article_/researchBrief_ for any live interactive session.\ndelete sd['schedArticle_'+chatId];\nsd['scheduledRun']=false;\nreturn [{ json: { chatId, title } }];"
+      },
+      "name": "Drop Scheduled Article",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4016,
+        1872
+      ],
+      "id": "dc4c7b34-9b05-4107-8cc2-c5b9dae70563"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "=🗑️ *Scheduled draft dropped*\n\n_{{ $json.title }}_\n\nNo approval within 6 hours. Nothing was published.",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "Markdown"
+        }
+      },
+      "name": "Send Dropped Notice",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        4240,
+        1872
+      ],
+      "id": "471c6105-5beb-4d2d-8197-698af6f5c23b",
+      "webhookId": "97bab444-d29b-4180-be5b-1451cb22b550",
+      "credentials": {
+        "telegramApi": {
+          "id": "F7kV4EHRCT4GkYho",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $getWorkflowStaticData('global')['currentChatId'] }}",
+        "text": "=⚠️ *Scheduled run failed while drafting*\n\n`{{ JSON.stringify($json.error || $json).slice(0,300) }}`",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "Markdown"
+        }
+      },
+      "name": "Sched Draft Error",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1600,
+        1888
+      ],
+      "id": "a0b5c91e-1f28-4b8a-ad7c-c807a18a0fc4",
+      "webhookId": "f27cfe55-de51-4240-b6f3-cf70ce14f0e1",
+      "credentials": {
+        "telegramApi": {
+          "id": "F7kV4EHRCT4GkYho",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "id": "2d5a52c7-ccc0-4fca-b2ad-9c0d11b7698a",
+      "name": "Sched Resolve Tags",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4240,
+        1200
+      ],
+      "parameters": {
+        "jsCode": "const sd=$getWorkflowStaticData('global');\nconst chatId=$json.chatId||sd['currentChatId'];\nconst names=String($json.tags||'').split(',').map(t=>t.trim()).filter(t=>t.length>1).slice(0,8);\n\n// Stash the post payload; the tag fan-out below reduces items down to just tag ids.\nsd['schedPending_'+chatId]={...$json};\n\nif(!names.length) return [{json:{chatId,tagName:null,noTags:true}}];\nreturn names.map(n=>({json:{chatId,tagName:n,noTags:false}}));"
+      }
+    },
+    {
+      "id": "c0c40cf3-d470-4fe4-a8b5-cb16abf54d78",
+      "name": "Sched Has Tags?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        4448,
+        1200
+      ],
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "sched-has-tags",
+              "leftValue": "={{ $json.noTags }}",
+              "operator": {
+                "operation": "equals",
+                "type": "boolean"
+              },
+              "rightValue": true
+            }
+          ],
+          "options": {
+            "typeValidation": "strict"
+          }
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "7534826d-7aae-4f2a-b790-976eeec342b8",
+      "name": "Sched Create Tag",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4656,
+        1104
+      ],
+      "parameters": {
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "jsonBody": "={ \"name\": \"{{ $json.tagName }}\" }",
+        "method": "POST",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        },
+        "sendBody": true,
+        "sendHeaders": true,
+        "specifyBody": "json",
+        "url": "https://promomag.co.uk/wp-json/wp/v2/tags"
+      },
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "jkmcRGFCJbTsbiYb",
+          "name": "n8n PromoMag"
+        }
+      }
+    },
+    {
+      "id": "4e5502a1-48b3-490e-acd3-3229362e874a",
+      "name": "Sched Extract Tag ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4864,
+        1104
+      ],
+      "parameters": {
+        "jsCode": "// Handles a newly created tag and WP's term_exists 400 for one that already exists,\n// including the case where term_id is only present inside a stringified error message.\nconst j = $json || {};\nconst b = j.body || j;\n\nlet tagId = b.id\n  || (b.data && b.data.term_id)\n  || (j.error && j.error.data && j.error.data.term_id)\n  || null;\n\nif (!tagId && j.error) {\n  const raw = typeof j.error === 'string'\n    ? j.error\n    : (j.error.message || JSON.stringify(j.error));\n  const m = String(raw).match(/\"term_id\"\\s*:\\s*(\\d+)/);\n  if (m) tagId = parseInt(m[1], 10);\n}\n\nreturn [{ json: { tagId } }];"
+      }
+    },
+    {
+      "id": "5dfb2029-dd09-407f-8f7b-c06d14889a4f",
+      "name": "Sched Aggregate Tags",
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        5072,
+        1104
+      ],
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "destinationFieldName": "tagItems",
+        "options": {}
+      }
+    },
+    {
+      "id": "50162b4a-95a0-43ce-bbbf-188481a1b941",
+      "name": "Sched Build Tagged Post",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5280,
+        1104
+      ],
+      "parameters": {
+        "jsCode": "const sd=$getWorkflowStaticData('global');\nconst chatId=sd['currentChatId'];\nconst p=sd['schedPending_'+chatId]||{};\ndelete sd['schedPending_'+chatId];\nconst tagIds=($json.tagItems||[]).map(i=>i.tagId).filter(Boolean);\nreturn [{ json: { ...p, chatId, tagIds } }];"
+      }
+    },
+    {
+      "id": "630d3df8-bc7e-4e7e-94a2-d3add08e6b8d",
+      "name": "Sched No Tags",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4656,
+        1312
+      ],
+      "parameters": {
+        "jsCode": "const sd=$getWorkflowStaticData('global');\nconst chatId=$json.chatId||sd['currentChatId'];\nconst p=sd['schedPending_'+chatId]||{};\ndelete sd['schedPending_'+chatId];\nreturn [{ json: { ...p, chatId, tagIds: [] } }];"
+      }
+    },
+    {
+      "id": "d8c9944b-287f-4734-981b-fdc336825eaa",
+      "name": "Authorised Sender?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -3120,
+        896
+      ],
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "owner-only",
+              "leftValue": "={{ $json.message.chat.id }}",
+              "operator": {
+                "operation": "equals",
+                "type": "number"
+              },
+              "rightValue": 8271099427
+            }
+          ],
+          "options": {
+            "typeValidation": "loose",
+            "version": 2
+          }
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "7603e63b-c745-4e09-aa8b-eab3f3f53b44",
+      "name": "Is Status Request?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -2768,
+        896
+      ],
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "status-check",
+              "leftValue": "={{ $json.isStatusReq }}",
+              "operator": {
+                "operation": "equals",
+                "type": "boolean"
+              },
+              "rightValue": true
+            }
+          ],
+          "options": {
+            "typeValidation": "strict"
+          }
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "efcbaea8-62c3-4e0e-b201-6b1f12300261",
+      "name": "Send Session Status",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -2768,
+        672
+      ],
+      "parameters": {
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "Markdown"
+        },
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.statusReport }}"
+      },
+      "webhookId": "1e1b930b-380f-46a5-aa5b-189a954d8113",
+      "credentials": {
+        "telegramApi": {
+          "id": "F7kV4EHRCT4GkYho",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "id": "b067061d-cc85-48ae-a6ab-0cbcdfac68bd",
+      "name": "Is Unknown Input?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -2640,
+        896
+      ],
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "unknown-check",
+              "leftValue": "={{ $json.isUnknown }}",
+              "operator": {
+                "operation": "equals",
+                "type": "boolean"
+              },
+              "rightValue": true
+            }
+          ],
+          "options": {
+            "typeValidation": "strict"
+          }
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "290afb97-1a8e-4d23-815c-aaeef1c84b82",
+      "name": "Send Guidance",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -2640,
+        1120
+      ],
+      "parameters": {
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "Markdown"
+        },
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.guidanceMsg }}"
+      },
+      "webhookId": "bbf810ef-0129-43c3-b53e-473ff472024f",
+      "credentials": {
+        "telegramApi": {
+          "id": "F7kV4EHRCT4GkYho",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "id": "a744f49e-5bfd-4487-a9fa-21d5676a8248",
+      "name": "Is Research Result?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1168,
+        848
+      ],
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "research-check",
+              "leftValue": "={{ $json.intent }}",
+              "operator": {
+                "operation": "equals",
+                "type": "string"
+              },
+              "rightValue": "category"
+            }
+          ],
+          "options": {
+            "typeValidation": "loose",
+            "version": 2
+          }
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "1f962c0a-758a-47bc-9ed3-a0e056ba4cde",
+      "name": "Send Topic List",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1392,
+        704
+      ],
+      "parameters": {
+        "jsCode": "const chatId = (()=>{try{return $('Telegram Trigger').first().json.message.chat.id}catch(e){return $getWorkflowStaticData('global')['currentChatId']}})();\nconst sd = $getWorkflowStaticData('global');\nconst brief = sd['researchBrief_' + chatId] || '';\n\n// Only a Research Agent brief carries TOPIC markers. Raw RSS headlines do not, and the old\n// researchInput_ fallback formatted them into a single malformed 'topic' that read as success.\nconst hasTopics = /\\bTOPIC\\s+\\d+\\b/i.test(brief);\nconst parts = hasTopics\n  ? brief.split(/\\bTOPIC\\s+\\d+\\b/i).map(p => p.trim()).filter(Boolean)\n  : [];\n\nconst topics = parts.map(p => {\n  const m = p.match(/Title:\\s*(.+)/i);\n  return { title: m ? m[1].trim() : p.split('\\n')[0].slice(0, 120), body: p };\n}).slice(0, 5);\n\n// Never hard-fail here: a thrown error kills the run silently and leaves the user staring\n// at the last status message with no idea anything went wrong.\nif (!topics.length) {\n  const s0 = sd['session_' + chatId] || {};\n  s0.stage = 'IDLE';\n  delete s0.topics;\n  delete s0.topicTitle;\n  sd['session_' + chatId] = s0;\n\n  // Parse Research Output already records why the agent returned no TOPIC blocks. Without\n  // surfacing it, every cause renders as \"no stories could be pulled\" - which sent two\n  // debugging sessions chasing the research when the real fault was an OpenAI rate limit.\n  let err = '';\n  try { err = String($('Parse Research Output').first().json.researchError || ''); } catch(e) {}\n\n  let text;\n  if (/rate limit/i.test(err)) {\n    text = '\\u23f3 *OpenAI rate limit reached.*\\n\\nThe research ran, but OpenAI refused the final call. Wait a full minute before sending the category again \\u2014 retrying immediately consumes the allowance the retry itself needs.';\n  } else if (err) {\n    const safe = err.replace(/[_*\\[\\]`]/g, ' ').replace(/\\s+/g, ' ').trim().slice(0, 200);\n    text = '\\u26a0\\ufe0f *Research failed.*\\n\\nNo topics were produced. Send the category again in a moment, or pick a different one.\\n\\n_' + safe + '_';\n  } else {\n    text = '\\u26a0\\ufe0f *Research came back empty.*\\n\\nNo stories could be pulled for that category just now. Send the category again in a moment, or pick a different one.';\n  }\n\n  return [{ json: { chatId, researchOk: false, researchError: err, text } }];\n}\n\nconst s = sd['session_' + chatId] || { stage: 'IDLE' };\ns.topics = topics.map(t => t.title);\ns.stage = 'AWAITING_TOPIC';\nsd['session_' + chatId] = s;\n\nlet text = '\\ud83d\\udcf0 *Five stories worth writing*\\n\\n';\ntopics.forEach((t, i) => {\n  const sig = (t.body.match(/Significance:\\s*(.+)/i) || [])[1] || '';\n  const src = (t.body.match(/Sources:\\s*(.+)/i) || [])[1] || '';\n  const dt  = (t.body.match(/Date:\\s*(.+)/i) || [])[1] || '';\n  text += '*' + (i + 1) + '. ' + t.title + '*\\n';\n  if (sig) text += sig + '\\n';\n  if (src) text += '_' + src + (dt ? ', ' + dt : '') + '_\\n';\n  text += '\\n';\n});\ntext += 'Reply with a number (1\\u20135) to pick one.';\n\nreturn [{ json: { chatId, researchOk: true, text } }];"
+      }
+    },
+    {
+      "id": "1fe499d0-ba7d-47b5-af42-b565cc117f20",
+      "name": "Send Topics Msg",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1616,
+        704
+      ],
+      "parameters": {
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "Markdown"
+        },
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.text }}"
+      },
+      "webhookId": "c6d94e5b-1ab2-4c41-9326-6816306c7b70",
+      "credentials": {
+        "telegramApi": {
+          "id": "F7kV4EHRCT4GkYho",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "id": "ffb82918-6e9e-4e2d-81ed-7cdf07450b10",
+      "name": "Is Topic Pick?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -1856,
+        1320
+      ],
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "topic-check",
+              "leftValue": "={{ $('Detect Stage').item.json.isTopicPick }}",
+              "operator": {
+                "operation": "equals",
+                "type": "boolean"
+              },
+              "rightValue": true
+            }
+          ],
+          "options": {
+            "typeValidation": "strict"
+          }
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "e1ac32f9-5660-4467-8524-f97ecd2b0aa3",
+      "name": "Build ToC Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1632,
+        1240
+      ],
+      "parameters": {
+        "jsCode": "const chatId = (()=>{try{return $('Telegram Trigger').item.json.message.chat.id}catch(e){return $getWorkflowStaticData('global')['currentChatId']}})();\nconst sd = $getWorkflowStaticData('global');\nconst s = sd['session_' + chatId] || {};\nconst raw = (()=>{try{return $('Detect Stage').item.json.originalText || ''}catch(e){return ''}})();\nconst topics = s.topics || [];\nconst brief = sd['researchBrief_' + chatId] || '';\n\n// Same hard-fail contract as Auto-Select Top Topic. This was the last unguarded route from an\n// empty or malformed brief to a published article: `parts[idx] || brief` silently handed the\n// whole brief - or, when gpt-4o-mini returned JSON, two characters of it - to the writer, which\n// then invented the article wholesale. Silence here is worse than a failed run.\nif (!brief.trim()) {\n  throw new Error('No research brief stored for chat ' + chatId + ' - a topic pick arrived with nothing to pick from. Send /reset and choose the category again.');\n}\nif (!/\\bTOPIC\\s+\\d+\\b/i.test(brief)) {\n  throw new Error('Stored research brief carries no TOPIC markers - the Research Agent drifted from the required plain-text format. Brief starts: ' + brief.slice(0, 120));\n}\n\n// Resolve the pick: a number first, then a loose title match, then fall back to the first.\nlet idx = -1;\nconst num = raw.match(/[1-5]/);\nif (num) idx = parseInt(num[0], 10) - 1;\nif (idx < 0 || idx >= topics.length) {\n  const lower = raw.toLowerCase();\n  idx = topics.findIndex(t => t && lower.includes(String(t).toLowerCase().slice(0, 20)));\n}\nif (idx < 0 || idx >= topics.length) idx = 0;\n\nconst topicTitle = topics[idx] || 'Selected topic';\ns.topicTitle = topicTitle;\nsd['session_' + chatId] = s;\n\nconst parts = brief.split(/\\bTOPIC\\s+\\d+\\b/i).map(p => p.trim()).filter(Boolean);\nconst topicBrief = parts[idx] || '';\nconst hasTitle = /Title:\\s*\\S/i.test(topicBrief);\n\n// No silent degradation to the full brief. A slice with no Title: field, or one too short to be\n// a dossier, means the brief is malformed - fail loudly rather than pass it to the writer.\nif (!topicBrief || !hasTitle || topicBrief.length < 80) {\n  throw new Error('Topic ' + (idx + 1) + ' has no parsable dossier in the stored brief (' + topicBrief.length + ' chars, Title field ' + (hasTitle ? 'present' : 'missing') + ', ' + parts.length + ' topic slices found). Send /reset and choose the category again.');\n}\n\nsd['topicBrief_' + chatId] = topicBrief;\n\nconst promptText = 'Topic: ' + topicTitle + '\\n\\n[RESEARCH]\\n' + topicBrief;\nreturn [{ json: { chatId, promptText, topicTitle } }];"
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "0d38ba03-fa47-46b5-add3-a46623247d3b",
+      "name": "ToC Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        -1408,
+        1240
+      ],
+      "parameters": {
+        "options": {
+          "systemMessage": "You produce a table of contents for a PromoMag feature article, then ask one question. Output EXACTLY this and nothing else:\n\nA numbered list of five section headings covering the topic, grounded in the supplied research.\n\nThen a blank line, then the line: What stance should the article take?\n\nThen exactly these three lines, reproduced unchanged:\n1. Supportive — argue in favour\n2. Critical — argue against\n3. Neutral — report it straight\n\nNo preamble. No acknowledgement. No offer to write it. No closing remarks. Do not propose any other angle and do not invent alternative options — only these three are accepted."
+        },
+        "promptType": "define",
+        "text": "={{ $json.promptText }}"
+      }
+    },
+    {
+      "id": "294c5110-67cd-4a66-92b9-8211284fb2a3",
+      "name": "Send ToC",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1184,
+        1240
+      ],
+      "parameters": {
+        "jsCode": "const chatId = (()=>{try{return $('Telegram Trigger').item.json.message.chat.id}catch(e){return $getWorkflowStaticData('global')['currentChatId']}})();\nconst sd = $getWorkflowStaticData('global');\nconst s = sd['session_' + chatId] || {};\ns.stage = 'AWAITING_DIRECTION';\nsd['session_' + chatId] = s;\n\nconst out = $input.first().json.output || '';\nconst text = '\\ud83d\\uddc2\\ufe0f *Outline \\u2014 ' + (s.topicTitle || '') + '*\\n\\n' + out;\nreturn [{ json: { chatId, text } }];"
+      }
+    },
+    {
+      "id": "04f19d25-121f-4a13-a99f-6f7eb5897963",
+      "name": "Send ToC Msg",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -960,
+        1240
+      ],
+      "parameters": {
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "Markdown"
+        },
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.text }}"
+      },
+      "webhookId": "2f8f95cc-d52f-45fc-8495-299cc966592a",
+      "credentials": {
+        "telegramApi": {
+          "id": "F7kV4EHRCT4GkYho",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "id": "33b618f6-3145-4771-bbcc-360dd2abc089",
+      "name": "Is Direction?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -1856,
+        1540
+      ],
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "direction-check",
+              "leftValue": "={{ $('Detect Stage').item.json.isDirection }}",
+              "operator": {
+                "operation": "equals",
+                "type": "boolean"
+              },
+              "rightValue": true
+            }
+          ],
+          "options": {
+            "typeValidation": "strict"
+          }
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "07703d17-1524-4d02-96c1-a7966e8ff3fe",
+      "name": "Build Article Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1632,
+        1540
+      ],
+      "parameters": {
+        "jsCode": "const chatId = (()=>{try{return $('Telegram Trigger').item.json.message.chat.id}catch(e){return $getWorkflowStaticData('global')['currentChatId']}})();\nconst sd = $getWorkflowStaticData('global');\nconst s = sd['session_' + chatId] || {};\nconst reply = (()=>{try{return $('Detect Stage').item.json.originalText || ''}catch(e){return ''}})();\n\n// Direction used to be free text pasted straight into the prompt. A reply like \"explore the\n// process and criteria\" is a research request wearing a writing instruction's clothes: the\n// dossier held nothing on criteria, so the writer invented them. A stance, by contrast, can\n// always be satisfied from whatever facts exist, which removes the invitation to invent.\nconst STANCES = {\n  supportive: {\n    label: 'Supportive',\n    instruction: 'Argue in favour of the subject of this story. Use the dossier to build the strongest honest case for it: what it achieves, who benefits, why it is the right move. Do not invent supporting facts. Where a dossier fact cuts against the case, address it and explain why the case still holds rather than omitting it.'\n  },\n  critical: {\n    label: 'Critical',\n    instruction: 'Argue against the subject of this story. Use the dossier to build the strongest honest case that it is inadequate, misdirected, or will not achieve what it claims: what it omits, who it fails, what stays unresolved. Do not invent damaging facts and do not imply wrongdoing the dossier does not report. Criticise the decision, the policy or the claim \\u2014 never the personal character of a named individual.'\n  },\n  neutral: {\n    label: 'Neutral',\n    instruction: 'Report the story straight. Set out what happened and what each named party\\'s position is according to the dossier, and make clear which questions the dossier leaves open. Reach a judgement only where the facts support one.'\n  }\n};\n\nconst t = String(reply).toLowerCase();\nlet key = 'neutral';\nif (/\\b(1|one|support|supportive|positive|favourable|favorable|endorse|approve|in favour|in favor)\\b/.test(t)) key = 'supportive';\nelse if (/\\b(2|two|critic|critical|criticise|criticize|negative|sceptical|skeptical|against|oppose|opposed|challenge)\\b/.test(t)) key = 'critical';\nelse if (/\\b(3|three|neutral|balanced|impartial|objective|straight|report)\\b/.test(t)) key = 'neutral';\n\nconst stance = STANCES[key];\ns.stance = key;\ns.direction = stance.label;\nsd['session_' + chatId] = s;\n\nconst brief = sd['topicBrief_' + chatId] || sd['researchBrief_' + chatId] || '';\nconst date = sd['researchDate_' + chatId] ||\n  new Date().toLocaleDateString('en-GB', {weekday:'long',day:'numeric',month:'long',year:'numeric'});\n\nconst promptText = '[CURRENT DATE: ' + date + ']\\n\\n' +\n  'Write the complete article now. Do not ask questions, do not acknowledge, do not send a table of ' +\n  'contents. Return the finished article starting with [BLOCK:METADATA].\\n\\n' +\n  'Category: ' + ((s.category && s.category.label) || '') + '\\n' +\n  'Topic: ' + (s.topicTitle || '') + '\\n\\n' +\n  'STANCE: ' + stance.label + '\\n' + stance.instruction + '\\n\\n' +\n  'The stance sets the argument, not the facts. It never licenses a claim the dossier does not ' +\n  'support.\\n\\n' +\n  '[LIVE RESEARCH BRIEF - every fact must come from here. Do not invent details:]\\n\\n' + brief;\n\nreturn [{ json: { promptText, chatId, stance: key } }];"
+      }
+    },
+    {
+      "id": "56e5ff3e-fbbd-4f0f-a4bf-c1f07ae8d50c",
+      "name": "Write Article",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        -1408,
+        1540
+      ],
+      "parameters": {
+        "options": {
+          "systemMessage": "You are the PromoMag.co.uk feature writer. Return ONLY the finished article in the exact block format below. No acknowledgements, no questions, no headings, no ## markers.\n\nSOURCE DISCIPLINE — this governs everything else:\n- The research dossier supplied in the prompt is your only permitted source of fact. Names, dates, figures, organisations, positions, quotations and sequence of events must all appear in it.\n- You may supply connective reasoning, argument and significance. You may not supply what someone said before, what they have historically believed, how the public \"initially\" reacted, prior agreements, or any trend claim about the past. If it reads like a fact and it is not in the dossier, cut it.\n- Do not state a count of anything unless the dossier states that count. If the dossier lists items, list them or say \"the signatories\" — do not tally them yourself. This rule governs the article body. The Coverage line in METADATA is the one place you must count, and there you are counting the dossier and your own paragraphs, not the world.\n- Do not write around a gap with a general statement. If the dossier does not support a point, leave the point out.\n- If the narrative direction asks for material the dossier does not contain, write what the dossier does support and record the gap in Coverage. Never fill the direction with invented background.\n- Never restate a fact in order to fill space. Every paragraph must contain information absent from every earlier paragraph.\n\nLENGTH — structural, not word-counted:\n- Write 9 to 11 paragraphs of roughly 160-200 words each.\n- Every paragraph must be anchored by at least one concrete item from the dossier: a named person, a named organisation, a figure, a date, a quotation, or a specific document or event.\n- If the dossier cannot support 9 anchored paragraphs, write only as many as it can and stop. A grounded 900-word article is correct output; a padded 1,600-word article is a failure.\n\nCOVERAGE — mandatory, no exceptions:\n- Every article carries a Coverage: line inside [BLOCK:METADATA], whether the dossier was rich or thin. Output without that line is malformed.\n- Use exactly this one-line shape:\nCoverage: used N of M dossier facts; P of Q paragraphs anchored; gaps: [what the dossier did not support, or \"none\"]\n- M is the number of separate factual items in the dossier. Q is the number of paragraphs you actually wrote. N and P are your own count.\n- A paragraph counts as anchored only if it carries a person, organisation, figure, date, quotation, document or event that appears in the dossier. Your own connective reasoning is not an anchor, and neither is a fact already anchored in an earlier paragraph.\n- If P is lower than Q, name the unanchored paragraphs in the gaps field and say what the dossier lacked. Do not adjust the numbers to look better — an accurate low count is correct output, an inflated one is a failure.\n\nVOICE:\n- Wall Street Journal register. Continuous narrative, no section headings, no subheadings, no bullet points.\n- Open on the most specific thing in the dossier: a named person doing a dated thing, or a figure. Never on a category or a trend.\n- Argue the narrative direction supplied in the prompt. Do not balance both sides equally; use the evidence to make the case.\n- Attribute as [Source Name, Month Year] where the dossier gives a source. Do not link to news articles.\n- Close on a specific, testable claim about what happens next — a named actor, a decision point, or a date to watch.\n\nBANNED MOVES — these matter more than the phrase list:\n- The abstract summary sentence: any sentence whose subject is \"the debate\", \"the conversation\", \"the movement\", \"the industry\", \"the challenge\", \"the path forward\", \"the journey ahead\", \"the future of X\".\n- The consensus sentence: \"there is a growing consensus / recognition / acknowledgment that...\".\n- The both-sides close: \"balancing progress with prudence\", \"risks and rewards\", \"enhance rather than disrupt\".\n- The watching-world sentence: \"as the world watches\", \"all eyes will be on\", \"will be closely scrutinised\".\n- Empty short sentences used only for rhythm. A short sentence is permitted only when it carries a fact or a judgement.\n- Any sentence that would remain true if this article's subject were swapped for a different subject in the same field. Delete it.\n\nBANNED PHRASES — never use: \"in conclusion\", \"ultimately\", \"it remains to be seen\", \"only time will tell\", \"the implications are significant\", \"the implications are profound\", \"the stakes are high\", \"in a world where\", \"in recent years\", \"in past years\", \"the choices made today\", \"for the greater good\", \"navigating this complex terrain\", \"at the forefront\", \"in the coming months\".\n\nOUTPUT FORMAT — reproduce these markers exactly, including every closing [/BLOCK] tag. A missing [/BLOCK] breaks the workflow:\n\n[BLOCK:METADATA]\nTitle: [SEO-optimised title]\nAuthor: By PromoMag [Category] Desk | [Month Year from CURRENT DATE]\nMeta: [meta description, roughly 150 characters]\nSlug: [url-slug-here]\nTags: [tag1, tag2, tag3, tag4, tag5]\nImage: [a vivid scene description for a photograph — objects, landscapes, architecture or concepts, no people and no faces. Never a filename.]\nCoverage: used N of M dossier facts; P of Q paragraphs anchored; gaps: [what the dossier did not support, or \"none\"]\n[/BLOCK]\n\n[BLOCK:ARTICLE]\n[The article. Continuous prose only.]\n[/BLOCK]\n\n[BLOCK:SEO]\nArticle drafted and saved.\n\n- Reply *post to WordPress* to save as a draft on PromoMag.co.uk\n- Reply *publish to WordPress* to go live immediately\n- Reply *social* for a social media pack\n[/BLOCK]"
+        },
+        "promptType": "define",
+        "text": "={{ $json.promptText }}"
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "56a19e5a-1b07-4ee0-ac75-f10d5a038309",
+      "name": "Build News Query",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1980,
+        760
+      ],
+      "parameters": {
+        "jsCode": "const sd = $getWorkflowStaticData('global');\n\n// Resolve the query from whichever path we arrived on, without relying on item pairing\n// through the Telegram response that sits between Detect Stage and this node.\nlet q = '';\ntry { q = $('Detect Stage').first().json.newsQuery || ''; } catch (e) {}\nif (!q) { try { q = $('Scheduled Config').first().json.newsQuery || ''; } catch (e) {} }\nif (!q) q = sd['currentNewsQuery'] || 'top news';\n\nconst chatId = (()=>{try{return $('Telegram Trigger').first().json.message.chat.id}catch(e){return sd['currentChatId']}})();\nsd['currentNewsQuery'] = q;\n\nconst newsUrl = 'https://news.google.com/rss/search?q=' + encodeURIComponent(q) +\n  '&hl=en-GB&gl=GB&ceid=GB:en';\n\nreturn [{ json: { chatId, newsQuery: q, newsUrl } }];"
+      }
+    },
+    {
+      "id": "3d4c4327-45df-4720-ae83-f6e97195507b",
+      "name": "Is Image Intent?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -2512,
+        1180
+      ],
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "image-check",
+              "leftValue": "={{ $json.isImage }}",
+              "operator": {
+                "operation": "equals",
+                "type": "boolean"
+              },
+              "rightValue": true
+            }
+          ],
+          "options": {
+            "caseSensitive": false,
+            "typeValidation": "strict"
+          }
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "2ddceb51-ea73-4d88-9a4a-233978b814c8",
+      "name": "Call Image Swap",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        -2288,
+        1280
+      ],
+      "parameters": {
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": false
+        },
+        "workflowId": {
+          "__rl": true,
+          "cachedResultName": "PromoMag Featured Image Swap",
+          "mode": "list",
+          "value": "gwxEUWTKBgWLXYS0"
+        }
+      }
+    },
+    {
+      "id": "6f7b5bc9-d9e6-476b-ae08-8dc43100ecc5",
+      "name": "Send ToC Brief Error",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -1632,
+        1400
+      ],
+      "parameters": {
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "Markdown"
+        },
+        "chatId": "={{ $('Telegram Trigger').first().json.message.chat.id }}",
+        "text": "=⚠️ *Cannot build the outline*\n\nThe stored research brief is unusable, so nothing was sent to the writer. No article has been drafted or invented.\n\nSend /reset and choose the category again.\n\n_{{ String($json.error?.message || $json.error || 'Unknown error').replace(/[_*\\[\\]`]/g, ' ').slice(0,250) }}_"
+      },
+      "webhookId": "3bc022f5-f9fb-40dc-a404-9eb5bcb960fb",
+      "credentials": {
+        "telegramApi": {
+          "id": "F7kV4EHRCT4GkYho",
+          "name": "Telegram account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Is WordPress Intent?": {
+      "main": [
+        [
+          {
+            "node": "Send WP Status",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Status Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send WP Status": {
+      "main": [
+        [
+          {
+            "node": "Retrieve Stored Article",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retrieve Stored Article": {
+      "main": [
+        [
+          {
+            "node": "Article Found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Article Found?": {
+      "main": [
+        [
+          {
+            "node": "Convert to HTML",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send No Article Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convert to HTML": {
+      "main": [
+        [
+          {
+            "node": "Map Category ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Map Category ID": {
+      "main": [
+        [
+          {
+            "node": "Resolve Tag Names",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post to WordPress": {
+      "main": [
+        [
+          {
+            "node": "Format WP Success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format WP Post Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format WP Success": {
+      "main": [
+        [
+          {
+            "node": "Send WP Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format WP Post Error": {
+      "main": [
+        [
+          {
+            "node": "Send WP Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Status Message": {
+      "main": [
+        [
+          {
+            "node": "Is Category?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Parse Blocks",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format AI Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          },
+          {
+            "node": "Write Scheduled Article",
+            "type": "ai_languageModel",
+            "index": 0
+          },
+          {
+            "node": "ToC Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          },
+          {
+            "node": "Write Article",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Window Buffer Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Blocks": {
+      "main": [
+        [
+          {
+            "node": "Send Block",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Should Generate Image?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format AI Error": {
+      "main": [
+        [
+          {
+            "node": "Send AI Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Reset?": {
+      "main": [
+        [
+          {
+            "node": "Reset Session",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Is Image Intent?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reset Session": {
+      "main": [
+        [
+          {
+            "node": "Send Reset Confirmation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Generate Image?": {
+      "main": [
+        [
+          {
+            "node": "Send Generating Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Generating Status": {
+      "main": [
+        [
+          {
+            "node": "Build Pixabay Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build DALL-E Prompt": {
+      "main": [
+        [
+          {
+            "node": "Generate DALL-E Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate DALL-E Image": {
+      "main": [
+        [
+          {
+            "node": "Extract DALL-E URL",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format Image Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload to WP Media": {
+      "main": [
+        [
+          {
+            "node": "Store WP Media ID",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format Image Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store WP Media ID": {
+      "main": [
+        [
+          {
+            "node": "Send Image Preview",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Image Error": {
+      "main": [
+        [
+          {
+            "node": "Send Image Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Category?": {
+      "main": [
+        [
+          {
+            "node": "Build News Query",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Is Topic Pick?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Google News": {
+      "main": [
+        [
+          {
+            "node": "Parse RSS and Build Brief",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Set Plain Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Plain Prompt": {
+      "main": [
+        [
+          {
+            "node": "Prepare Session",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Session": {
+      "main": [
+        [
+          {
+            "node": "Is Scheduled Run?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Pixabay Query": {
+      "main": [
+        [
+          {
+            "node": "Fetch Pixabay API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Pixabay API": {
+      "main": [
+        [
+          {
+            "node": "Parse Pixabay Result",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build DALL-E Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Pixabay Result": {
+      "main": [
+        [
+          {
+            "node": "Has Pixabay Image?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Pixabay Image?": {
+      "main": [
+        [
+          {
+            "node": "Set Pixabay URL",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build DALL-E Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Image Paths": {
+      "main": [
+        [
+          {
+            "node": "Download Final Image Binary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract DALL-E URL": {
+      "main": [
+        [
+          {
+            "node": "Merge Image Paths",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Set Pixabay URL": {
+      "main": [
+        [
+          {
+            "node": "Merge Image Paths",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Final Image Binary": {
+      "main": [
+        [
+          {
+            "node": "Upload to WP Media",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format Image Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resolve Tag Names": {
+      "main": [
+        [
+          {
+            "node": "Has Tags?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Tags?": {
+      "main": [
+        [
+          {
+            "node": "No Tags Passthrough",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create WP Tag",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create WP Tag": {
+      "main": [
+        [
+          {
+            "node": "Extract Tag ID",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "No Tags Passthrough": {
+      "main": [
+        [
+          {
+            "node": "Post to WordPress",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Tag ID": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Tag IDs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Tag IDs": {
+      "main": [
+        [
+          {
+            "node": "Build Post from Tags",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Post from Tags": {
+      "main": [
+        [
+          {
+            "node": "Post to WordPress",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse RSS and Build Brief": {
+      "main": [
+        [
+          {
+            "node": "Research Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Research LLM": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Research Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Research Agent": {
+      "main": [
+        [
+          {
+            "node": "Parse Research Output",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Research Agent Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Research Output": {
+      "main": [
+        [
+          {
+            "node": "Prepare Session",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Research Agent Fallback": {
+      "main": [
+        [
+          {
+            "node": "Prepare Session",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google News Search Tool": {
+      "ai_tool": [
+        [
+          {
+            "node": "Research Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Scheduled Run?": {
+      "main": [
+        [
+          {
+            "node": "Auto-Select Top Topic",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Is Research Result?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Scheduled Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auto-Select Top Topic": {
+      "main": [
+        [
+          {
+            "node": "Write Scheduled Article",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write Scheduled Article": {
+      "main": [
+        [
+          {
+            "node": "Parse Scheduled Blocks",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Sched Draft Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Scheduled Blocks": {
+      "main": [
+        [
+          {
+            "node": "Sched Pixabay Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sched Pixabay Query": {
+      "main": [
+        [
+          {
+            "node": "Sched Fetch Pixabay",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sched Fetch Pixabay": {
+      "main": [
+        [
+          {
+            "node": "Sched Pick Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sched Pick Image": {
+      "main": [
+        [
+          {
+            "node": "Sched Download Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sched Download Image": {
+      "main": [
+        [
+          {
+            "node": "Sched Upload Media",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sched Upload Media": {
+      "main": [
+        [
+          {
+            "node": "Sched Store Media",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sched Store Media": {
+      "main": [
+        [
+          {
+            "node": "Send Approval Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Approval Request": {
+      "main": [
+        [
+          {
+            "node": "Wait for Approval",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait for Approval": {
+      "main": [
+        [
+          {
+            "node": "Approval Router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Approval Router": {
+      "main": [
+        [
+          {
+            "node": "Approved?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Approved?": {
+      "main": [
+        [
+          {
+            "node": "Publish or Tailor?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Drop Scheduled Article",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Publish or Tailor?": {
+      "main": [
+        [
+          {
+            "node": "Sched Resolve Tags",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Tailor Handoff",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sched Post to WordPress": {
+      "main": [
+        [
+          {
+            "node": "Send Published Confirmation",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Publish Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drop Scheduled Article": {
+      "main": [
+        [
+          {
+            "node": "Send Dropped Notice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sched Resolve Tags": {
+      "main": [
+        [
+          {
+            "node": "Sched Has Tags?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sched Has Tags?": {
+      "main": [
+        [
+          {
+            "node": "Sched No Tags",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Sched Create Tag",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sched Create Tag": {
+      "main": [
+        [
+          {
+            "node": "Sched Extract Tag ID",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Sched Extract Tag ID": {
+      "main": [
+        [
+          {
+            "node": "Sched Aggregate Tags",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sched Aggregate Tags": {
+      "main": [
+        [
+          {
+            "node": "Sched Build Tagged Post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sched Build Tagged Post": {
+      "main": [
+        [
+          {
+            "node": "Sched Post to WordPress",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sched No Tags": {
+      "main": [
+        [
+          {
+            "node": "Sched Post to WordPress",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Authorised Sender?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Authorised Sender?": {
+      "main": [
+        [
+          {
+            "node": "Detect Stage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Image Preview": {
+      "main": [
+        null,
+        [
+          {
+            "node": "Format Image Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Detect Stage": {
+      "main": [
+        [
+          {
+            "node": "Is Status Request?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Status Request?": {
+      "main": [
+        [
+          {
+            "node": "Send Session Status",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Is Unknown Input?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Unknown Input?": {
+      "main": [
+        [
+          {
+            "node": "Send Guidance",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Is Reset?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Research Result?": {
+      "main": [
+        [
+          {
+            "node": "Send Topic List",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Topic List": {
+      "main": [
+        [
+          {
+            "node": "Send Topics Msg",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Topic Pick?": {
+      "main": [
+        [
+          {
+            "node": "Build ToC Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Is Direction?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build ToC Prompt": {
+      "main": [
+        [
+          {
+            "node": "ToC Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send ToC Brief Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ToC Agent": {
+      "main": [
+        [
+          {
+            "node": "Send ToC",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send ToC": {
+      "main": [
+        [
+          {
+            "node": "Send ToC Msg",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Direction?": {
+      "main": [
+        [
+          {
+            "node": "Build Article Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Set Plain Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Article Prompt": {
+      "main": [
+        [
+          {
+            "node": "Write Article",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write Article": {
+      "main": [
+        [
+          {
+            "node": "Parse Blocks",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format AI Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scheduled Config": {
+      "main": [
+        [
+          {
+            "node": "Build News Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build News Query": {
+      "main": [
+        [
+          {
+            "node": "Fetch Google News",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Image Intent?": {
+      "main": [
+        [
+          {
+            "node": "Call Image Swap",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Is WordPress Intent?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "meta": {
+    "aiBuilderAssisted": true,
+    "builderVariant": "mcp"
+  }
+}

@@ -6,13 +6,16 @@ Source of truth for our n8n automations. Every production workflow lives here as
 
 ```
 workflows/
-  jira/        Jira ticket routing, SLA alerts, sync jobs
-  airtable/    Airtable data pipelines and syncs
-  ai/          AI API workflows (classification, summarisation, enrichment)
-  wordpress/   WordPress publishing / content automations
-  shared/      Sub-workflows reused by others (error handler, notifications)
-docs/          Conventions, runbooks
-scripts/       Export / import against the n8n API
+  promomag/      PromoMag article generation, topic research, featured images
+  promoboost/    PromoBoost release analytics
+  sla-manager/   SLA Contract Manager (extraction pipeline, manual entry, alert digest)
+  swbw/          SWBW sign-up notifications and WhatsApp bot
+  augmented/     Augmented anonymised meeting minutes
+  mastery/       Mastery WordPress content agent
+  shared/        Cross-project utilities (backup, error handler)
+  <project>/archive/   Superseded versions kept for reference — not deployed
+docs/            Conventions, runbooks
+scripts/         Export / import against the n8n API (clean.py normalises + redacts)
 ```
 
 ## Quick start
@@ -37,5 +40,6 @@ See [docs/CONVENTIONS.md](docs/CONVENTIONS.md) for naming, tagging and error-han
 ## Rules
 
 - **Never commit credentials.** Exports contain credential *references* (ID + name) only — keep it that way. Secrets live in n8n's credential store.
+- `scripts/clean.py` redacts hard-coded keys to `REDACTED_*` on export. A file containing a placeholder means that workflow still has a secret pasted into a node — move it to a credential. `import.sh` refuses to push such files.
 - One workflow per file, filename = slug of the workflow name.
 - Every production workflow has an error workflow set (`shared/error-handler`).
