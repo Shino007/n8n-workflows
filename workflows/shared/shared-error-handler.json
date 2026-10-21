@@ -1,6 +1,7 @@
 {
+  "id": "QjNpLyKeMF4dFaQr",
   "name": "[SHARED] Error handler",
-  "active": false,
+  "active": true,
   "tags": [
     "area:shared",
     "owner:jonathan",

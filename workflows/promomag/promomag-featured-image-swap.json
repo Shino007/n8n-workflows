@@ -5,7 +5,7 @@
   "tags": [],
   "settings": {
     "executionOrder": "v1",
-    "errorWorkflow": "__SET_ME_ERROR_WORKFLOW_ID__"
+    "errorWorkflow": "QjNpLyKeMF4dFaQr"
   },
   "nodes": [
     {
@@ -71,20 +71,12 @@
       ],
       "parameters": {
         "method": "GET",
-        "url": "=https://pixabay.com/api/?q={{ encodeURIComponent($('Normalise Request').item.json.query) }}&image_type=photo&orientation=horizontal&min_width=1280&safesearch=true&per_page=10&order=popular",
+        "url": "=https://pixabay.com/api/?key=REDACTED_API_KEY&q={{ encodeURIComponent($('Normalise Request').item.json.query) }}&image_type=photo&orientation=horizontal&min_width=1280&safesearch=true&per_page=10&order=popular",
         "options": {
           "timeout": 15000
-        },
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpQueryAuth"
-      },
-      "onError": "continueRegularOutput",
-      "credentials": {
-        "httpQueryAuth": {
-          "id": "__SET_ME_PIXABAY_CREDENTIAL_ID__",
-          "name": "Pixabay API"
         }
       },
+      "onError": "continueRegularOutput",
       "retryOnFail": true,
       "maxTries": 3,
       "waitBetweenTries": 5000

@@ -2,34 +2,12 @@
 
 v23 (`workflows/promomag/promomag-generate-article-telegram-schedule-v23.json`) is a **new** workflow. v22 stays live until v23 has passed the tests below.
 
-## 1. Before merge (n8n UI, once)
+## 1–2. Deploy (done 21 Oct 2026 through the n8n MCP connector)
 
-1. **Pixabay credential.** If your Pixabay account lets you regenerate the API key, do that first, because the old one sat in plain text in several nodes. Then go to **Credentials → Add credential → Query Auth**:
-   - Credential name: `Pixabay API`
-   - Name: `key`
-   - Value: the Pixabay API key
-2. Note the credential ID: it's the last part of the credential's URL.
-
-## 2. After merge (your machine)
-
-```bash
-git checkout main && git pull
-./scripts/import.sh workflows/shared/shared-error-handler.json   # prints: created … (<ERROR_WF_ID>)
-
-PIXABAY_ID=<credential id from step 1>
-ERROR_WF_ID=<id printed above>
-sed -i "s/__SET_ME_PIXABAY_CREDENTIAL_ID__/$PIXABAY_ID/g; s/__SET_ME_ERROR_WORKFLOW_ID__/$ERROR_WF_ID/g" \
-  workflows/promomag/promomag-featured-image-swap.json \
-  workflows/promomag/promomag-generate-article-telegram-schedule-v23.json
-
-./scripts/import.sh workflows/promomag/promomag-featured-image-swap.json            # updates the live sub-workflow (v22-compatible)
-./scripts/import.sh workflows/promomag/promomag-generate-article-telegram-schedule-v23.json   # creates v23, inactive
-
-./scripts/export.sh   # v23 and the error handler land in workflows/_inbox/ with their new IDs
-mv workflows/_inbox/promomag-generate-article-telegram-schedule-v23.json workflows/promomag/
-mv workflows/_inbox/shared-error-handler.json workflows/shared/
-# commit the filled-in IDs on a branch and open a PR so the repo matches n8n
-```
+- `[SHARED] Error handler` was created and published as `QjNpLyKeMF4dFaQr`. It only runs when another workflow fails.
+- v23 was created **inactive** as `1LoD338PhT6pNglJ`, with its error workflow set to the handler.
+- It uses the existing credentials: Telegram account, n8n PromoMag and OpenAi account.
+- The Pixabay key stays typed into *Fetch Pixabay API*, the same as in v22. In git it's `REDACTED_API_KEY`, so `import.sh` won't push this file. Change v23 through the connector or the n8n UI, then re-export. To make `import.sh` usable again, first move the key into a Query Auth credential (Name: `key`).
 
 `import.sh` refuses any file that still contains `__SET_ME_` or `REDACTED_`.
 
