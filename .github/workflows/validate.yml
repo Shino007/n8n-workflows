@@ -1,0 +1,38 @@
+name: Validate workflows
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: JSON is valid and has required fields
+        run: |
+          fail=0
+          for f in $(find workflows -name '*.json'); do
+            if ! jq -e '.name and .nodes and .connections' "$f" >/dev/null; then
+              echo "::error file=$f::Invalid JSON or missing name/nodes/connections"; fail=1
+            fi
+            if jq -e '.pinData // empty | length > 0' "$f" >/dev/null 2>&1; then
+              echo "::error file=$f::Contains pinned data — run scripts/export.sh"; fail=1
+            fi
+          done
+          exit $fail
+
+      - name: No files left in _inbox
+        run: |
+          if ls workflows/_inbox/*.json >/dev/null 2>&1; then
+            echo "::error::Move workflows out of workflows/_inbox/ into an area folder"; exit 1
+          fi
+
+      - name: Secret scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

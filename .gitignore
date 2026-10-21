@@ -1,0 +1,5 @@
+.env
+workflows/_inbox/
+*.log
+.DS_Store
+node_modules/
