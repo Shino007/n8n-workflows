@@ -15,6 +15,12 @@ for f in "$@"; do
     echo "skipped  $f — contains REDACTED_ placeholders; move the secret into an n8n credential first" >&2
     continue
   fi
+  # IDs that only exist once something is created in n8n (credential, error workflow) are committed
+  # as __SET_ME_* until filled in; pushing one would leave the node pointing at nothing
+  if grep -q '__SET_ME_' "$f"; then
+    echo "skipped  $f — contains __SET_ME_ placeholders; fill in the IDs first (see docs/runbooks)" >&2
+    continue
+  fi
   id=$(jq -r '.id // empty' "$f")
   # Public API only accepts these fields on create/update
   body=$(jq '{name, nodes, connections, settings: (.settings // {}), staticData}' "$f")

@@ -1,0 +1,107 @@
+{
+  "id": "QjNpLyKeMF4dFaQr",
+  "name": "[SHARED] Error handler",
+  "active": true,
+  "tags": [
+    "area:shared",
+    "owner:jonathan",
+    "prod"
+  ],
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "width": 520,
+        "height": 300,
+        "color": 4,
+        "content": "## [SHARED] Error handler\n**Owner:** Jonathan · **Trigger:** Error Trigger (n8n calls this when a workflow that names it under *Settings → Error workflow* fails).\n\n**Does:** sends a plain-text Telegram alert with the workflow, failing node, error and execution link.\n\n**Downstream:** Telegram (Telegram account). Change the alert chat in *Format Alert*.\n\nDoes not need to be active."
+      },
+      "id": "30f65092-5e0a-4074-8e7e-00fc7dc42fd8",
+      "name": "Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -420,
+        -260
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "e6f986d2-9430-4fac-8a9e-85701a58bcfa",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Alerts the owner on Telegram when any workflow that names this one as its error workflow fails.\n// Plain text on purpose: Markdown would fail to send on error messages full of _ * [ ].\nconst ALERT_CHAT_ID = 8271099427;\n\nconst e = $json.execution || {};\nconst wf = $json.workflow || {};\n// A trigger that fails to start reports under .trigger instead of .execution\nconst err = e.error || ($json.trigger && $json.trigger.error) || {};\nconst node = e.lastNodeExecuted || (err.node && err.node.name) || 'unknown';\n\nconst lines = [\n  '🚨 n8n workflow failed',\n  'Workflow: ' + (wf.name || wf.id || 'unknown'),\n  'Node: ' + node,\n  'Error: ' + String(err.message || err.description || 'no message').slice(0, 500),\n  'Mode: ' + (e.mode || ($json.trigger ? 'trigger' : 'unknown'))\n];\nif (e.url) lines.push('Execution: ' + e.url);\n\nreturn [{ json: { chatId: ALERT_CHAT_ID, text: lines.join('\\n') } }];\n"
+      },
+      "id": "e1a2627e-25cb-4aa0-ae26-461b581a58ca",
+      "name": "Format Alert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "86ff1c9e-5613-4ddd-bafb-e943eacff036",
+      "name": "Send Telegram Alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        480,
+        0
+      ],
+      "webhookId": "b49618c9-ec6f-48a4-8fd3-38fd0a5f45d4",
+      "credentials": {
+        "telegramApi": {
+          "id": "F7kV4EHRCT4GkYho",
+          "name": "Telegram account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Format Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Alert": {
+      "main": [
+        [
+          {
+            "node": "Send Telegram Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "meta": {}
+}
