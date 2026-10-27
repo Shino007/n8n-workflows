@@ -1,11 +1,11 @@
 {
   "id": "1LoD338PhT6pNglJ",
   "name": "[PROMOMAG] Generate article (telegram + schedule) v23",
-  "active": false,
+  "active": true,
   "tags": [
     "area:promomag",
-    "dev",
-    "owner:jonathan"
+    "owner:jonathan",
+    "prod"
   ],
   "settings": {
     "executionOrder": "v1",
