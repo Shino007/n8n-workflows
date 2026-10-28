@@ -57,7 +57,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// SINGLE SOURCE OF TRUTH for PromoMag settings. Both triggers pass through this node, and every\n// other node reads it with $('Config').first().json.cfg - change chat IDs or categories here only.\nconst CFG = {\n  ownerChatId: 8271099427,\n  authorisedChatIds: [8271099427],\n  defaultCategoryId: 1,\n  // WordPress category IDs verified against https://promomag.co.uk/wp-json/wp/v2/categories\n  categories: {\n    'business-finance':   { label: 'Business',      wpId: 2,    keywords: ['business', 'finance'],     query: 'business OR finance news' },\n    'entertainment-arts': { label: 'Entertainment', wpId: 105,  keywords: ['entertainment', 'arts'],   query: 'entertainment OR arts OR culture news' },\n    'environment-nature': { label: 'Environment',   wpId: 162,  keywords: ['environment', 'nature'],   query: 'environment OR nature OR climate news' },\n    'science-technology': { label: 'Science',       wpId: 296,  keywords: ['science', 'technology'],   query: 'science OR technology OR AI news' },\n    'politics-global':    { label: 'Politics',      wpId: 5325, keywords: ['politics', 'global'],      query: 'UK politics OR global news OR parliament OR international affairs' }\n  },\n  // The daily scheduled run takes the next category in this list (by day of year).\n  // Leave a single slug here to pin the schedule to one category.\n  scheduleRotation: ['business-finance', 'science-technology', 'entertainment-arts', 'environment-nature', 'politics-global']\n};\n\nreturn $input.all().map((item, i) => ({ json: { ...item.json, cfg: CFG }, pairedItem: { item: i } }));\n"
+        "jsCode": "// SINGLE SOURCE OF TRUTH for PromoMag settings. Both triggers pass through this node, and every\n// other node reads it with $('Config').first().json.cfg - change chat IDs or categories here only.\nconst CFG = {\n  ownerChatId: 8271099427,\n  authorisedChatIds: [8271099427],\n  defaultCategoryId: 1,\n  // WordPress category IDs verified against https://promomag.co.uk/wp-json/wp/v2/categories\n  categories: {\n    'business-finance':   { label: 'Business',      wpId: 2,    keywords: ['business', 'finance'],     query: 'business OR finance news' },\n    'entertainment-arts': { label: 'Entertainment', wpId: 105,  keywords: ['entertainment', 'arts'],   query: 'entertainment OR arts OR culture news' },\n    'environment-nature': { label: 'Environment',   wpId: 162,  keywords: ['environment', 'nature'],   query: 'environment OR nature OR climate news' },\n    'science-technology': { label: 'Science',       wpId: 296,  keywords: ['science', 'technology'],   query: 'science OR technology OR AI news' },\n    'politics-global':    { label: 'Politics',      wpId: 5325, keywords: ['politics', 'global'],      query: 'UK politics OR global news OR parliament OR international affairs' }\n  },\n  // The daily scheduled run takes the next category in this list (by day of year).\n  // Leave a single slug here to pin the schedule to one category.\n  scheduleRotation: ['business-finance', 'science-technology', 'entertainment-arts', 'environment-nature', 'politics-global'],\n  // Full-text research for the chosen topic. Limits protect the OpenAI rate limit: every 1,000\n  // characters of source text is ~250 input tokens, read twice (dossier + fact check).\n  research: {\n    maxSources: 4,\n    maxCharsPerSource: 6000,\n    maxTotalChars: 18000,\n    minFacts: 4,\n    // 'jina' fetches through r.jina.ai (main text, no key needed); 'direct' fetches the page and\n    // strips HTML in Build Source Pack. Switch here if the reader service is unavailable.\n    reader: 'jina',\n    // Ranked above news coverage when found.\n    primaryDomains: ['gov.uk', 'parliament.uk', 'nhs.uk', 'ons.gov.uk', 'bankofengland.co.uk', 'europa.eu',\n      'prnewswire.com', 'businesswire.com', 'globenewswire.com', 'newswire.ca', 'sec.gov']\n  },\n  models: { dossier: 'gpt-4o', factCheck: 'gpt-4o', revise: 'gpt-4o' },\n  // Test hook: used ONLY by a manual run started from the Schedule Trigger (never by the 07:00\n  // production run). Skips topic research and runs sourcing, dossier, writer and fact check on\n  // this story. Set to null to disable.\n  testTopic: {\n    title: 'Naboo acquires UK meetings and events specialist pro-ven',\n    search: 'Naboo acquires pro-ven',\n    primary: 'Naboo',\n    category: 'business-finance'\n  }\n};\n\nreturn $input.all().map((item, i) => ({ json: { ...item.json, cfg: CFG }, pairedItem: { item: i } }));\n"
       },
       "name": "Config",
       "type": "n8n-nodes-base.code",
@@ -138,7 +138,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Explicit conversation state machine. The stage is authoritative and the message is\n// interpreted in light of it, rather than the stage being guessed from keywords alone.\n// Stages: IDLE -> AWAITING_TOPIC -> AWAITING_DIRECTION -> ARTICLE_READY\nconst raw = $input.item.json.message?.text || '';\nconst text = raw.toLowerCase().trim();\nconst chatId = $input.item.json.message.chat.id;\nconst sd = $getWorkflowStaticData('global');\nconst key = 'session_' + chatId;\nconst s = sd[key] || { stage: 'IDLE' };\nif (!s.stage) s.stage = 'IDLE';\n\n// Category keywords come from the Config node so the map lives in one place.\nconst cfg = $('Config').first().json.cfg;\nconst CATS = {};\nfor (const [slug, c] of Object.entries(cfg.categories)) {\n  for (const kw of c.keywords) CATS[kw] = { label: c.label, slug, wpId: c.wpId, query: c.query };\n}\nconst catPattern = new RegExp(Object.keys(CATS).join('|'));\n\nconst isReset     = text === '/start' || text === '/reset' ||\n  /\\b(new article|new post|start over|start again|fresh start|another article|write another)\\b/.test(text);\nconst isStatusReq = text === '/status';\n\n// Anchored at the start of the message so it cannot collide with ordinary prose. It must be\n// tested before wantsWp, because that regex matches \\bpost\\b and \\bwp\\b - so a request like\n// \"image london skyline on the post\" would otherwise route to WordPress.\nconst imageMatch = raw.trim().match(/^\\/?image\\b[:\\s]*(.*)$/i);\nconst wantsImage  = !!imageMatch;\nconst imageQuery  = imageMatch ? imageMatch[1].trim() : '';\n\nconst wantsWp     = /\\b(post|publish|wordpress|wp|send to wp|go live)\\b/.test(text);\nconst wantsSocial = /\\b(social|twitter|linkedin|facebook|instagram|hashtag|thumbnail)\\b/.test(text);\n\nlet intent = 'unknown';\nlet statusMsg = '';\nlet newsQuery = '';\nlet isPublish = false;\n\nif (isStatusReq) {\n  intent = 'status';\n} else if (isReset) {\n  intent = 'reset';\n  statusMsg = '\\ud83d\\udd04 Resetting your PromoMag session...';\n} else if (wantsImage) {\n  // Deliberately stage-independent: the target is whatever was published most recently,\n  // which may be a scheduled post from a session that no longer exists.\n  intent = imageQuery ? 'image' : 'unknown';\n  statusMsg = '\\ud83d\\uddbc\\ufe0f Searching for *' + imageQuery + '* and checking the latest post...';\n} else if (wantsWp && s.stage === 'ARTICLE_READY') {\n  intent = 'wordpress';\n  isPublish = /\\b(publish|go live|make it live|post live)\\b/.test(text);\n  statusMsg = isPublish\n    ? '\\ud83d\\ude80 *Publishing to PromoMag...*'\n    : '\\ud83d\\udce4 *Saving to PromoMag as a draft...*';\n} else if (wantsSocial && s.stage === 'ARTICLE_READY') {\n  intent = 'social';\n  statusMsg = '\\ud83d\\udcf1 *Building your social pack...*';\n} else if (wantsWp || wantsSocial) {\n  // Asked to post or socialise before an article exists - explain rather than misread it.\n  intent = 'unknown';\n} else if (s.stage === 'IDLE') {\n  const m = text.match(catPattern);\n  if (m) {\n    const c = CATS[m[0]];\n    s.category = c;\n    intent = 'category';\n    newsQuery = c.query;\n    statusMsg = '\\ud83d\\udd0d Researching trending *' + c.label + '* stories from Reuters, Bloomberg, BBC and more...\\n\\n_This takes 20\\u201330 seconds._';\n  }\n} else if (s.stage === 'AWAITING_TOPIC') {\n  intent = 'topic';\n  statusMsg = '\\ud83d\\udccb Got it \\u2014 building your outline...';\n} else if (s.stage === 'AWAITING_DIRECTION') {\n  intent = 'direction';\n  statusMsg = '\\u270d\\ufe0f *Writing the full article now...*\\n\\n_30\\u201360 seconds._';\n}\n\nconst IMAGE_HELP = 'Send *image <search term>* at any time to replace the featured image on the most recent post.';\n\nconst STAGE_HELP = {\n  IDLE: 'Choose a category to begin:\\n\\nBusiness & Finance | Entertainment & Arts | Environment & Nature | Science & Technology | Politics & Global News\\n\\n' + IMAGE_HELP,\n  AWAITING_TOPIC: 'Reply with a topic number (1\\u20135) from the list above.',\n  AWAITING_DIRECTION: 'Reply with the stance for the article:\\n\\n1. Supportive \\u2014 argue in favour\\n2. Critical \\u2014 argue against\\n3. Neutral \\u2014 report it straight',\n  ARTICLE_READY: 'Reply *post to WordPress* for a draft, *publish to WordPress* to go live, or *social* for a social pack.\\n\\n' + IMAGE_HELP\n};\n\nconst guidanceMsg = '\\ud83e\\udd14 I did not follow that.\\n\\n' + (STAGE_HELP[s.stage] || STAGE_HELP.IDLE) +\n  '\\n\\nSend /status to see where we are, or /reset to start again.';\n\nconst statusReport = '\\ud83d\\udccd *Session status*\\n\\nStage: `' + s.stage + '`\\nCategory: ' +\n  (s.category ? s.category.label : '\\u2014') + '\\nTopic: ' + (s.topicTitle || '\\u2014') +\n  '\\nStance: ' + (s.direction || '\\u2014') +\n  '\\nArticle drafted: ' + (s.stage === 'ARTICLE_READY' ? 'yes' : 'no') + '\\n\\n' + STAGE_HELP[s.stage];\n\nsd[key] = s;\n\n// Legacy field names retained so the existing branch conditions keep working unchanged.\n// `query` duplicates imageQuery because the image sub-workflow reads j.query on a\n// passthrough trigger, which does no field mapping of its own.\nreturn [{ json: {\n  chatId,\n  originalText: raw,\n  intent,\n  stage: s.stage,\n  isStatusReq: intent === 'status',\n  isUnknown:   intent === 'unknown',\n  isReset:     intent === 'reset',\n  isWPIntent:  intent === 'wordpress',\n  isCategory:  intent === 'category',\n  isTopicPick: intent === 'topic',\n  isDirection: intent === 'direction',\n  isImage:     intent === 'image',\n  imageQuery,\n  query: imageQuery,\n  newsQuery,\n  isPublish,\n  statusMsg,\n  guidanceMsg,\n  statusReport,\n  category: s.category || null\n}}];"
+        "jsCode": "// Explicit conversation state machine. The stage is authoritative and the message is\n// interpreted in light of it, rather than the stage being guessed from keywords alone.\n// Stages: IDLE -> AWAITING_TOPIC -> AWAITING_DIRECTION -> ARTICLE_READY\nconst raw = $input.item.json.message?.text || '';\nconst text = raw.toLowerCase().trim();\nconst chatId = $input.item.json.message.chat.id;\nconst sd = $getWorkflowStaticData('global');\nconst key = 'session_' + chatId;\nconst s = sd[key] || { stage: 'IDLE' };\nif (!s.stage) s.stage = 'IDLE';\n\n// Category keywords come from the Config node so the map lives in one place.\nconst cfg = $('Config').first().json.cfg;\nconst CATS = {};\nfor (const [slug, c] of Object.entries(cfg.categories)) {\n  for (const kw of c.keywords) CATS[kw] = { label: c.label, slug, wpId: c.wpId, query: c.query };\n}\nconst catPattern = new RegExp(Object.keys(CATS).join('|'));\n\nconst isReset     = text === '/start' || text === '/reset' ||\n  /\\b(new article|new post|start over|start again|fresh start|another article|write another)\\b/.test(text);\nconst isStatusReq = text === '/status';\n\n// Anchored at the start of the message so it cannot collide with ordinary prose. It must be\n// tested before wantsWp, because that regex matches \\bpost\\b and \\bwp\\b - so a request like\n// \"image london skyline on the post\" would otherwise route to WordPress.\nconst imageMatch = raw.trim().match(/^\\/?image\\b[:\\s]*(.*)$/i);\nconst wantsImage  = !!imageMatch;\nconst imageQuery  = imageMatch ? imageMatch[1].trim() : '';\n\nconst wantsWp     = /\\b(post|publish|wordpress|wp|send to wp|go live)\\b/.test(text);\nconst wantsSocial = /\\b(social|twitter|linkedin|facebook|instagram|hashtag|thumbnail)\\b/.test(text);\n\nlet intent = 'unknown';\nlet statusMsg = '';\nlet newsQuery = '';\nlet isPublish = false;\n\nif (isStatusReq) {\n  intent = 'status';\n} else if (isReset) {\n  intent = 'reset';\n  statusMsg = '\\ud83d\\udd04 Resetting your PromoMag session...';\n} else if (wantsImage) {\n  // Deliberately stage-independent: the target is whatever was published most recently,\n  // which may be a scheduled post from a session that no longer exists.\n  intent = imageQuery ? 'image' : 'unknown';\n  statusMsg = '\\ud83d\\uddbc\\ufe0f Searching for *' + imageQuery + '* and checking the latest post...';\n} else if (wantsWp && s.stage === 'ARTICLE_READY') {\n  intent = 'wordpress';\n  isPublish = /\\b(publish|go live|make it live|post live)\\b/.test(text);\n  statusMsg = isPublish\n    ? '\\ud83d\\ude80 *Publishing to PromoMag...*'\n    : '\\ud83d\\udce4 *Saving to PromoMag as a draft...*';\n} else if (wantsSocial && s.stage === 'ARTICLE_READY') {\n  intent = 'social';\n  statusMsg = '\\ud83d\\udcf1 *Building your social pack...*';\n} else if (wantsWp || wantsSocial) {\n  // Asked to post or socialise before an article exists - explain rather than misread it.\n  intent = 'unknown';\n} else if (s.stage === 'IDLE') {\n  const m = text.match(catPattern);\n  if (m) {\n    const c = CATS[m[0]];\n    s.category = c;\n    intent = 'category';\n    newsQuery = c.query;\n    statusMsg = '\\ud83d\\udd0d Researching trending *' + c.label + '* stories from Reuters, Bloomberg, BBC and more...\\n\\n_This takes 20\\u201330 seconds._';\n  }\n} else if (s.stage === 'AWAITING_TOPIC') {\n  intent = 'topic';\n  statusMsg = '\\ud83d\\udccb Got it \\u2014 reading the full source articles and extracting verified facts. _About a minute._';\n} else if (s.stage === 'AWAITING_DIRECTION') {\n  intent = 'direction';\n  statusMsg = '\\u270d\\ufe0f *Writing the full article now...*\\n\\n_30\\u201360 seconds._';\n}\n\nconst IMAGE_HELP = 'Send *image <search term>* at any time to replace the featured image on the most recent post.';\n\nconst STAGE_HELP = {\n  IDLE: 'Choose a category to begin:\\n\\nBusiness & Finance | Entertainment & Arts | Environment & Nature | Science & Technology | Politics & Global News\\n\\n' + IMAGE_HELP,\n  AWAITING_TOPIC: 'Reply with a topic number (1\\u20135) from the list above.',\n  AWAITING_DIRECTION: 'Reply with the stance for the article:\\n\\n1. Supportive \\u2014 argue in favour\\n2. Critical \\u2014 argue against\\n3. Neutral \\u2014 report it straight',\n  ARTICLE_READY: 'Reply *post to WordPress* for a draft, *publish to WordPress* to go live, or *social* for a social pack.\\n\\n' + IMAGE_HELP\n};\n\nconst guidanceMsg = '\\ud83e\\udd14 I did not follow that.\\n\\n' + (STAGE_HELP[s.stage] || STAGE_HELP.IDLE) +\n  '\\n\\nSend /status to see where we are, or /reset to start again.';\n\nconst statusReport = '\\ud83d\\udccd *Session status*\\n\\nStage: `' + s.stage + '`\\nCategory: ' +\n  (s.category ? s.category.label : '\\u2014') + '\\nTopic: ' + (s.topicTitle || '\\u2014') +\n  '\\nStance: ' + (s.direction || '\\u2014') +\n  '\\nArticle drafted: ' + (s.stage === 'ARTICLE_READY' ? 'yes' : 'no') + '\\n\\n' + STAGE_HELP[s.stage];\n\nsd[key] = s;\n\n// Legacy field names retained so the existing branch conditions keep working unchanged.\n// `query` duplicates imageQuery because the image sub-workflow reads j.query on a\n// passthrough trigger, which does no field mapping of its own.\nreturn [{ json: {\n  chatId,\n  originalText: raw,\n  intent,\n  stage: s.stage,\n  isStatusReq: intent === 'status',\n  isUnknown:   intent === 'unknown',\n  isReset:     intent === 'reset',\n  isWPIntent:  intent === 'wordpress',\n  isCategory:  intent === 'category',\n  isTopicPick: intent === 'topic',\n  isDirection: intent === 'direction',\n  isImage:     intent === 'image',\n  imageQuery,\n  query: imageQuery,\n  newsQuery,\n  isPublish,\n  statusMsg,\n  guidanceMsg,\n  statusReport,\n  category: s.category || null\n}}];"
       },
       "id": "d0cbea4b-d602-4a6c-af97-30facad27430",
       "name": "Detect Stage",
@@ -653,8 +653,9 @@
         200
       ],
       "parameters": {
-        "jsCode": "const chatId = (()=>{try{return $('Telegram Trigger').first().json.message.chat.id}catch(e){}try{return $('Scheduled Config').first().json.chatId}catch(e){}return $getWorkflowStaticData('global')['currentChatId']})();\nconst sd = $getWorkflowStaticData('global');\nconst s = sd['session_' + chatId] || {};\nconst reply = (()=>{try{return $('Detect Stage').item.json.originalText || ''}catch(e){return ''}})();\n\n// Direction used to be free text pasted straight into the prompt. A reply like \"explore the\n// process and criteria\" is a research request wearing a writing instruction's clothes: the\n// dossier held nothing on criteria, so the writer invented them. A stance, by contrast, can\n// always be satisfied from whatever facts exist, which removes the invitation to invent.\nconst STANCES = {\n  supportive: {\n    label: 'Supportive',\n    instruction: 'Argue in favour of the subject of this story. Use the dossier to build the strongest honest case for it: what it achieves, who benefits, why it is the right move. Do not invent supporting facts. Where a dossier fact cuts against the case, address it and explain why the case still holds rather than omitting it.'\n  },\n  critical: {\n    label: 'Critical',\n    instruction: 'Argue against the subject of this story. Use the dossier to build the strongest honest case that it is inadequate, misdirected, or will not achieve what it claims: what it omits, who it fails, what stays unresolved. Do not invent damaging facts and do not imply wrongdoing the dossier does not report. Criticise the decision, the policy or the claim \\u2014 never the personal character of a named individual.'\n  },\n  neutral: {\n    label: 'Neutral',\n    instruction: 'Report the story straight. Set out what happened and what each named party\\'s position is according to the dossier, and make clear which questions the dossier leaves open. Reach a judgement only where the facts support one.'\n  }\n};\n\nconst t = String(reply).toLowerCase();\nlet key = 'neutral';\nif (/\\b(1|one|support|supportive|positive|favourable|favorable|endorse|approve|in favour|in favor)\\b/.test(t)) key = 'supportive';\nelse if (/\\b(2|two|critic|critical|criticise|criticize|negative|sceptical|skeptical|against|oppose|opposed|challenge)\\b/.test(t)) key = 'critical';\nelse if (/\\b(3|three|neutral|balanced|impartial|objective|straight|report)\\b/.test(t)) key = 'neutral';\n\nconst stance = STANCES[key];\ns.stance = key;\ns.direction = stance.label;\nsd['session_' + chatId] = s;\n\nconst brief = sd['topicBrief_' + chatId] || sd['researchBrief_' + chatId] || '';\nconst date = sd['researchDate_' + chatId] ||\n  new Date().toLocaleDateString('en-GB', {weekday:'long',day:'numeric',month:'long',year:'numeric'});\n\nconst promptText = '[CURRENT DATE: ' + date + ']\\n\\n' +\n  'Write the complete article now. Do not ask questions, do not acknowledge, do not send a table of ' +\n  'contents. Return the finished article starting with [BLOCK:METADATA].\\n\\n' +\n  'Category: ' + ((s.category && s.category.label) || '') + '\\n' +\n  'Topic: ' + (s.topicTitle || '') + '\\n\\n' +\n  'STANCE: ' + stance.label + '\\n' + stance.instruction + '\\n\\n' +\n  'The stance sets the argument, not the facts. It never licenses a claim the dossier does not ' +\n  'support.\\n\\n' +\n  '[LIVE RESEARCH BRIEF - every fact must come from here. Do not invent details:]\\n\\n' + brief;\n\nreturn [{ json: { promptText, chatId, stance: key } }];"
-      }
+        "jsCode": "const chatId = (()=>{try{return $('Telegram Trigger').first().json.message.chat.id}catch(e){}try{return $('Scheduled Config').first().json.chatId}catch(e){}return $getWorkflowStaticData('global')['currentChatId']})();\nconst sd = $getWorkflowStaticData('global');\nconst s = sd['session_' + chatId] || {};\nconst reply = (()=>{try{return $('Detect Stage').item.json.originalText || ''}catch(e){return ''}})();\n\n// Direction used to be free text pasted straight into the prompt. A reply like \"explore the\n// process and criteria\" is a research request wearing a writing instruction's clothes: the\n// dossier held nothing on criteria, so the writer invented them. A stance, by contrast, can\n// always be satisfied from whatever facts exist, which removes the invitation to invent.\nconst STANCES = {\n  supportive: {\n    label: 'Supportive',\n    instruction: 'Argue in favour of the subject of this story. Use the dossier to build the strongest honest case for it: what it achieves, who benefits, why it is the right move. Do not invent supporting facts. Where a dossier fact cuts against the case, address it and explain why the case still holds rather than omitting it.'\n  },\n  critical: {\n    label: 'Critical',\n    instruction: 'Argue against the subject of this story. Use the dossier to build the strongest honest case that it is inadequate, misdirected, or will not achieve what it claims: what it omits, who it fails, what stays unresolved. Do not invent damaging facts and do not imply wrongdoing the dossier does not report. Criticise the decision, the policy or the claim \\u2014 never the personal character of a named individual.'\n  },\n  neutral: {\n    label: 'Neutral',\n    instruction: 'Report the story straight. Set out what happened and what each named party\\'s position is according to the dossier, and make clear which questions the dossier leaves open. Reach a judgement only where the facts support one.'\n  }\n};\n\nconst t = String(reply).toLowerCase();\nlet key = 'neutral';\nif (/\\b(1|one|support|supportive|positive|favourable|favorable|endorse|approve|in favour|in favor)\\b/.test(t)) key = 'supportive';\nelse if (/\\b(2|two|critic|critical|criticise|criticize|negative|sceptical|skeptical|against|oppose|opposed|challenge)\\b/.test(t)) key = 'critical';\nelse if (/\\b(3|three|neutral|balanced|impartial|objective|straight|report)\\b/.test(t)) key = 'neutral';\n\nconst stance = STANCES[key];\ns.stance = key;\ns.direction = stance.label;\nsd['session_' + chatId] = s;\n\nconst dossier = sd['dossier_' + chatId];\n// Only a verified dossier may reach the writer. Sessions started before this change have none.\nif (!dossier || !dossier.text) throw new Error('No verified dossier for this topic. Send /reset and choose the category again.');\nconst brief = dossier.text;\nconst date = sd['researchDate_' + chatId] ||\n  new Date().toLocaleDateString('en-GB', {weekday:'long',day:'numeric',month:'long',year:'numeric'});\n\nconst promptText = '[CURRENT DATE: ' + date + ']\\n\\n' +\n  'Write the complete article now. Do not ask questions, do not acknowledge, do not send a table of ' +\n  'contents. Return the finished article starting with [BLOCK:METADATA].\\n\\n' +\n  'Category: ' + ((s.category && s.category.label) || '') + '\\n' +\n  'Topic: ' + (s.topicTitle || '') + '\\n\\n' +\n  'STANCE: ' + stance.label + '\\n' + stance.instruction + '\\n\\n' +\n  'The stance sets the argument, not the facts. It never licenses a claim the dossier does not ' +\n  'support.\\n\\n' +\n  '[VERIFIED DOSSIER - your only source of fact]\\n\\n' + brief;\n\nreturn [{ json: { promptText, chatId, stance: key } }];"
+      },
+      "onError": "continueErrorOutput"
     },
     {
       "id": "56e5ff3e-fbbd-4f0f-a4bf-c1f07ae8d50c",
@@ -667,7 +668,7 @@
       ],
       "parameters": {
         "options": {
-          "systemMessage": "You are the PromoMag.co.uk feature writer. Return ONLY the finished article in the exact block format below. No acknowledgements, no questions, no headings, no ## markers.\n\nSOURCE DISCIPLINE — this governs everything else:\n- The research dossier supplied in the prompt is your only permitted source of fact. Names, dates, figures, organisations, positions, quotations and sequence of events must all appear in it.\n- You may supply connective reasoning, argument and significance. You may not supply what someone said before, what they have historically believed, how the public \"initially\" reacted, prior agreements, or any trend claim about the past. If it reads like a fact and it is not in the dossier, cut it.\n- Do not state a count of anything unless the dossier states that count. If the dossier lists items, list them or say \"the signatories\" — do not tally them yourself. This rule governs the article body. The Coverage line in METADATA is the one place you must count, and there you are counting the dossier and your own paragraphs, not the world.\n- Do not write around a gap with a general statement. If the dossier does not support a point, leave the point out.\n- If the narrative direction asks for material the dossier does not contain, write what the dossier does support and record the gap in Coverage. Never fill the direction with invented background.\n- Never restate a fact in order to fill space. Every paragraph must contain information absent from every earlier paragraph.\n\nLENGTH — structural, not word-counted:\n- Write 9 to 11 paragraphs of roughly 160-200 words each.\n- Every paragraph must be anchored by at least one concrete item from the dossier: a named person, a named organisation, a figure, a date, a quotation, or a specific document or event.\n- If the dossier cannot support 9 anchored paragraphs, write only as many as it can and stop. A grounded 900-word article is correct output; a padded 1,600-word article is a failure.\n\nCOVERAGE — mandatory, no exceptions:\n- Every article carries a Coverage: line inside [BLOCK:METADATA], whether the dossier was rich or thin. Output without that line is malformed.\n- Use exactly this one-line shape:\nCoverage: used N of M dossier facts; P of Q paragraphs anchored; gaps: [what the dossier did not support, or \"none\"]\n- M is the number of separate factual items in the dossier. Q is the number of paragraphs you actually wrote. N and P are your own count.\n- A paragraph counts as anchored only if it carries a person, organisation, figure, date, quotation, document or event that appears in the dossier. Your own connective reasoning is not an anchor, and neither is a fact already anchored in an earlier paragraph.\n- If P is lower than Q, name the unanchored paragraphs in the gaps field and say what the dossier lacked. Do not adjust the numbers to look better — an accurate low count is correct output, an inflated one is a failure.\n\nVOICE:\n- Wall Street Journal register. Continuous narrative, no section headings, no subheadings, no bullet points.\n- Open on the most specific thing in the dossier: a named person doing a dated thing, or a figure. Never on a category or a trend.\n- Argue the narrative direction supplied in the prompt. Do not balance both sides equally; use the evidence to make the case.\n- Attribute as [Source Name, Month Year] where the dossier gives a source. Do not link to news articles.\n- Close on a specific, testable claim about what happens next — a named actor, a decision point, or a date to watch.\n\nBANNED MOVES — these matter more than the phrase list:\n- The abstract summary sentence: any sentence whose subject is \"the debate\", \"the conversation\", \"the movement\", \"the industry\", \"the challenge\", \"the path forward\", \"the journey ahead\", \"the future of X\".\n- The consensus sentence: \"there is a growing consensus / recognition / acknowledgment that...\".\n- The both-sides close: \"balancing progress with prudence\", \"risks and rewards\", \"enhance rather than disrupt\".\n- The watching-world sentence: \"as the world watches\", \"all eyes will be on\", \"will be closely scrutinised\".\n- Empty short sentences used only for rhythm. A short sentence is permitted only when it carries a fact or a judgement.\n- Any sentence that would remain true if this article's subject were swapped for a different subject in the same field. Delete it.\n\nBANNED PHRASES — never use: \"in conclusion\", \"ultimately\", \"it remains to be seen\", \"only time will tell\", \"the implications are significant\", \"the implications are profound\", \"the stakes are high\", \"in a world where\", \"in recent years\", \"in past years\", \"the choices made today\", \"for the greater good\", \"navigating this complex terrain\", \"at the forefront\", \"in the coming months\".\n\nOUTPUT FORMAT — reproduce these markers exactly, including every closing [/BLOCK] tag. A missing [/BLOCK] breaks the workflow:\n\n[BLOCK:METADATA]\nTitle: [SEO-optimised title]\nAuthor: By PromoMag [Category] Desk | [Month Year from CURRENT DATE]\nMeta: [meta description, roughly 150 characters]\nSlug: [url-slug-here]\nTags: [tag1, tag2, tag3, tag4, tag5]\nImage: [a vivid scene description for a photograph — objects, landscapes, architecture or concepts, no people and no faces. Never a filename.]\nCoverage: used N of M dossier facts; P of Q paragraphs anchored; gaps: [what the dossier did not support, or \"none\"]\n[/BLOCK]\n\n[BLOCK:ARTICLE]\n[The article. Continuous prose only.]\n[/BLOCK]\n\n[BLOCK:SEO]\nArticle drafted and saved.\n\n- Reply *post to WordPress* to save as a draft on PromoMag.co.uk\n- Reply *publish to WordPress* to go live immediately\n- Reply *social* for a social media pack\n[/BLOCK]"
+          "systemMessage": "You are the PromoMag.co.uk feature writer. Return ONLY the finished article in the exact block format below. No acknowledgements, no questions, no headings, no ## markers.\n\nSOURCE DISCIPLINE — this governs everything else:\n- The VERIFIED DOSSIER in the prompt is your only permitted source of fact. Every name, role, figure, date, quotation, decision and sequence of events must appear in it. Its quotes are the exact source wording; use them to get details right.\n- You may supply connective reasoning and significance. You may not supply background, history, trends, motives or anything you remember about the subject. If it reads like a fact and it is not in the dossier, cut it.\n- If the dossier is silent on a point, omit it. Never write that something is undisclosed, unclear, unknown or remains to be seen unless the dossier's EXPLICITLY NOT DISCLOSED list says so — and then attribute it to that source.\n- Do not characterise timing (\"on the heels of\", \"weeks after\", \"shortly after\", \"follows\", \"recently\") unless both dates are in the dossier and support it. When you mention an earlier event, give the date the dossier gives.\n- Do not state causation or funding links (X funded Y, X enabled Y, X led to Y) unless the dossier states them.\n- Figures: reproduce exactly as the dossier states, including what they cover (domestic vs worldwide, annual vs total, estimate vs final, currency). Never add, convert, round or recombine figures.\n- Attribution of decisions and statements: credit exactly the party the dossier credits.\n- People: use only the role the dossier gives at the time of the event. Never call anyone \"current\" or \"former\" unless the dossier does.\n- Do not state a count of anything unless the dossier states that count.\n\nATTRIBUTION:\n- Attribute in prose: \"according to Business Travel News\", \"Naboo said\", \"the company told EU-Startups\".\n- Never output bracket citation tags such as [Outlet, Month Year], never footnote numbers, never dossier numbering, never URLs. Do not write a Sources line: the workflow appends real source links to the post.\n\nLENGTH:\n- Write as many paragraphs as the dossier supports, typically 5–9. Shorter is better than padded.\n- Every paragraph must carry at least one dossier fact not used in an earlier paragraph. No paragraph of pure commentary.\n\nVOICE:\n- Wall Street Journal register. Continuous narrative, no section headings, no subheadings, no bullet points.\n- Open on the most specific fact in the dossier: a named party doing a dated thing, or a figure.\n- Close on the last substantive fact, or on a next step only if the dossier states one (a date, a decision, a stated plan). Never predict.\n\nBANNED PHRASES — never use: \"on the heels of\", \"remains undisclosed\", \"yet to disclose\", \"it remains to be seen\", \"only time will tell\", \"industry observers\", \"poised to\", \"in conclusion\", \"ultimately\", \"the implications are significant\", \"the stakes are high\", \"in a world where\", \"in recent years\", \"at the forefront\", \"in the coming months\", \"setting a new standard\".\n\nSTANCE:\n- The prompt gives a stance (supportive, critical or neutral). The stance shapes emphasis and framing only. It never licenses a claim the dossier does not support, and it never removes a dossier fact that cuts against it — address that fact instead.\n\nOUTPUT FORMAT — reproduce these markers exactly, including every closing [/BLOCK] tag:\n\n[BLOCK:METADATA]\nTitle: [SEO-optimised title, factual, no claims beyond the dossier]\nAuthor: By PromoMag [Category] Desk | [Month Year from CURRENT DATE]\nMeta: [meta description, roughly 150 characters, factual]\nSlug: [url-slug-here]\nTags: [tag1, tag2, tag3, tag4, tag5]\nImage: [a vivid scene description for a photograph — objects, landscapes, architecture or concepts, no people and no faces. Never a filename.]\n[/BLOCK]\n\n[BLOCK:ARTICLE]\n[The article. Continuous prose only. Separate paragraphs with a blank line.]\n[/BLOCK]\n\n[BLOCK:SEO]\nArticle drafted and saved.\n\n- Reply *post to WordPress* to save as a draft on PromoMag.co.uk\n- Reply *publish to WordPress* to go live immediately\n- Reply *social* for a social media pack\n[/BLOCK]"
         },
         "promptType": "define",
         "text": "={{ $json.promptText }}"
@@ -676,7 +677,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const CHUNK_SIZE = 3800;\nconst TELEGRAM_MAX = 4000;\nconst output = $input.item.json.output || '';\nconst chatId = (()=>{try{return $('Telegram Trigger').first().json.message.chat.id}catch(e){}try{return $('Scheduled Config').first().json.chatId}catch(e){}return $getWorkflowStaticData('global')['currentChatId']})();\nconst items = [];\n\n// Bound each block at [/BLOCK] OR at the next [BLOCK: marker, whichever comes first.\n// Writing agents sometimes omit the closers entirely; the old 'take everything to the end'\n// fallback made METADATA swallow the whole article and breach Telegram's 4096-char limit.\nconst extractBlock = (tag, text) => {\n  const open = '[BLOCK:' + tag + ']';\n  const start = text.indexOf(open);\n  if (start === -1) return null;\n  const contentStart = start + open.length;\n  const closeIdx = text.indexOf('[/BLOCK]', contentStart);\n  const nextIdx = text.indexOf('[BLOCK:', contentStart);\n  const bounds = [closeIdx, nextIdx].filter(i => i !== -1);\n  const end = bounds.length ? Math.min.apply(null, bounds) : text.length;\n  return text.slice(contentStart, end).trim();\n};\n\nconst parseField = (block, field) => {\n  if (!block) return '';\n  const lines = block.split('\\n');\n  for (const line of lines) {\n    const prefix = field + ':';\n    if (line.trim().startsWith(prefix)) return line.trim().slice(prefix.length).trim();\n  }\n  return '';\n};\n\nconst chunkText = (text) => {\n  const chunks = [];\n  let remaining = String(text || '');\n  while (remaining.length > 0) {\n    let chunk = remaining.slice(0, CHUNK_SIZE);\n    if (remaining.length > CHUNK_SIZE) {\n      const lastNewline = chunk.lastIndexOf('\\n');\n      if (lastNewline > CHUNK_SIZE * 0.5) chunk = chunk.slice(0, lastNewline);\n    }\n    chunks.push(chunk.trim());\n    remaining = remaining.slice(chunk.length).trim();\n  }\n  return chunks;\n};\n\n// Last line of defence: nothing leaves this node above the Telegram limit, whatever\n// shape the model returned. A 400 here aborts the whole run before the image path.\nconst pushMsg = (text, generateImage) => {\n  const parts = chunkText(text);\n  for (let i = 0; i < parts.length; i++) {\n    const isLast = i === parts.length - 1;\n    items.push({ json: {\n      chatId: chatId,\n      text: parts[i].slice(0, TELEGRAM_MAX),\n      generateImage: generateImage && isLast\n    }});\n  }\n};\n\nconst metadataBlock = extractBlock('METADATA', output);\nconst articleBlock = extractBlock('ARTICLE', output);\nconst seoBlock = extractBlock('SEO', output);\nconst isCompleteArticle = !!(metadataBlock && articleBlock && seoBlock);\nconst hasBlocks = !!(metadataBlock || articleBlock || seoBlock);\n\nconst detectCategory = (meta) => {\n  const author = parseField(meta, 'Author').toLowerCase();\n  if (author.indexOf('business') !== -1 || author.indexOf('finance') !== -1) return 'business-finance';\n  if (author.indexOf('entertainment') !== -1 || author.indexOf('arts') !== -1) return 'entertainment-arts';\n  if (author.indexOf('environment') !== -1 || author.indexOf('nature') !== -1) return 'environment-nature';\n  if (author.indexOf('science') !== -1 || author.indexOf('technology') !== -1) return 'science-technology';\n  if (author.indexOf('politics') !== -1 || author.indexOf('global') !== -1 || author.indexOf('news') !== -1) return 'politics-global';\n  return 'uncategorized';\n};\n\nif (isCompleteArticle) {\n  const staticData = $getWorkflowStaticData('global');\n  staticData['currentChatId'] = chatId; // reliable chatId for post-Merge nodes\n\n  // Prefer the category the user actually chose this session over guessing from the byline.\n  const sess = staticData['session_' + chatId] || {};\n  const chosen = sess.category && sess.category.slug ? sess.category.slug : detectCategory(metadataBlock);\n\n  staticData['article_' + chatId] = {\n    title: parseField(metadataBlock, 'Title'),\n    slug: parseField(metadataBlock, 'Slug'),\n    excerpt: parseField(metadataBlock, 'Meta'),\n    tags: parseField(metadataBlock, 'Tags'),\n    imageDescription: parseField(metadataBlock, 'Image'),\n    content: articleBlock,\n    category: chosen,\n    wpMediaId: 0,\n    wpMediaUrl: null\n  };\n\n  // Advance the state machine so the WordPress and social gates open.\n  sess.stage = 'ARTICLE_READY';\n  staticData['session_' + chatId] = sess;\n}\n\nif (isCompleteArticle) {\n  pushMsg('\\ud83d\\udcf0 *Article Brief*\\n\\n' + metadataBlock, false);\n\n  const clean = articleBlock\n    .split('\\n')\n    .filter(function(l) { return !l.trim().match(/^#{1,6}\\s/); })\n    .join('\\n')\n    .replace(/\\n{3,}/g, '\\n\\n')\n    .trim();\n\n  const chunks = chunkText(clean);\n  for (let i = 0; i < chunks.length; i++) {\n    const label = chunks.length > 1\n      ? '\\u270d\\ufe0f *Article Body (' + (i + 1) + '/' + chunks.length + ')*\\n\\n' + chunks[i]\n      : '\\u270d\\ufe0f *Article Body*\\n\\n' + chunks[i];\n    items.push({ json: { chatId: chatId, text: label.slice(0, TELEGRAM_MAX), generateImage: false } });\n  }\n\n  pushMsg('\\ud83d\\udce3 *Next Step*\\n\\n' + seoBlock, true);\n\n} else if (hasBlocks) {\n  const partialText = output\n    .replace(/\\[BLOCK:[^\\]]+\\]/g, '')\n    .replace(/\\[\\/BLOCK\\]/g, '')\n    .trim();\n  pushMsg(partialText || output, false);\n} else {\n  pushMsg(output || 'No response generated.', false);\n}\n\nreturn items.length > 0\n  ? items\n  : [{ json: { chatId: chatId, text: '\\u26a0\\ufe0f No content returned. Please try again.', generateImage: false } }];"
+        "jsCode": "const CHUNK_SIZE = 3800;\nconst TELEGRAM_MAX = 4000;\nconst output = $input.item.json.output || '';\nconst chatId = (()=>{try{return $('Telegram Trigger').first().json.message.chat.id}catch(e){}try{return $('Scheduled Config').first().json.chatId}catch(e){}return $getWorkflowStaticData('global')['currentChatId']})();\nconst items = [];\n\n// Bound each block at [/BLOCK] OR at the next [BLOCK: marker, whichever comes first.\n// Writing agents sometimes omit the closers entirely; the old 'take everything to the end'\n// fallback made METADATA swallow the whole article and breach Telegram's 4096-char limit.\nconst extractBlock = (tag, text) => {\n  const open = '[BLOCK:' + tag + ']';\n  const start = text.indexOf(open);\n  if (start === -1) return null;\n  const contentStart = start + open.length;\n  const closeIdx = text.indexOf('[/BLOCK]', contentStart);\n  const nextIdx = text.indexOf('[BLOCK:', contentStart);\n  const bounds = [closeIdx, nextIdx].filter(i => i !== -1);\n  const end = bounds.length ? Math.min.apply(null, bounds) : text.length;\n  return text.slice(contentStart, end).trim();\n};\n\nconst parseField = (block, field) => {\n  if (!block) return '';\n  const lines = block.split('\\n');\n  for (const line of lines) {\n    const prefix = field + ':';\n    if (line.trim().startsWith(prefix)) return line.trim().slice(prefix.length).trim();\n  }\n  return '';\n};\n\nconst chunkText = (text) => {\n  const chunks = [];\n  let remaining = String(text || '');\n  while (remaining.length > 0) {\n    let chunk = remaining.slice(0, CHUNK_SIZE);\n    if (remaining.length > CHUNK_SIZE) {\n      const lastNewline = chunk.lastIndexOf('\\n');\n      if (lastNewline > CHUNK_SIZE * 0.5) chunk = chunk.slice(0, lastNewline);\n    }\n    chunks.push(chunk.trim());\n    remaining = remaining.slice(chunk.length).trim();\n  }\n  return chunks;\n};\n\n// Last line of defence: nothing leaves this node above the Telegram limit, whatever\n// shape the model returned. A 400 here aborts the whole run before the image path.\nconst pushMsg = (text, generateImage) => {\n  const parts = chunkText(text);\n  for (let i = 0; i < parts.length; i++) {\n    const isLast = i === parts.length - 1;\n    items.push({ json: {\n      chatId: chatId,\n      text: parts[i].slice(0, TELEGRAM_MAX),\n      generateImage: generateImage && isLast\n    }});\n  }\n};\n\nconst metadataBlock = extractBlock('METADATA', output);\nconst articleBlock = extractBlock('ARTICLE', output);\nconst seoBlock = extractBlock('SEO', output);\nconst isCompleteArticle = !!(metadataBlock && articleBlock && seoBlock);\nconst hasBlocks = !!(metadataBlock || articleBlock || seoBlock);\n\nconst detectCategory = (meta) => {\n  const author = parseField(meta, 'Author').toLowerCase();\n  if (author.indexOf('business') !== -1 || author.indexOf('finance') !== -1) return 'business-finance';\n  if (author.indexOf('entertainment') !== -1 || author.indexOf('arts') !== -1) return 'entertainment-arts';\n  if (author.indexOf('environment') !== -1 || author.indexOf('nature') !== -1) return 'environment-nature';\n  if (author.indexOf('science') !== -1 || author.indexOf('technology') !== -1) return 'science-technology';\n  if (author.indexOf('politics') !== -1 || author.indexOf('global') !== -1 || author.indexOf('news') !== -1) return 'politics-global';\n  return 'uncategorized';\n};\n\nif (isCompleteArticle) {\n  const staticData = $getWorkflowStaticData('global');\n  staticData['currentChatId'] = chatId; // reliable chatId for post-Merge nodes\n\n  // Prefer the category the user actually chose this session over guessing from the byline.\n  const sess = staticData['session_' + chatId] || {};\n  const chosen = sess.category && sess.category.slug ? sess.category.slug : detectCategory(metadataBlock);\n\n  staticData['article_' + chatId] = {\n    title: parseField(metadataBlock, 'Title'),\n    slug: parseField(metadataBlock, 'Slug'),\n    excerpt: parseField(metadataBlock, 'Meta'),\n    tags: parseField(metadataBlock, 'Tags'),\n    imageDescription: parseField(metadataBlock, 'Image'),\n    content: articleBlock,\n    category: chosen,\n    wpMediaId: 0,\n    wpMediaUrl: null,\n    // Set by Finalise Draft. Prepare Post refuses to publish an unverified article.\n    verified: $input.item.json.verified === true,\n    checkSummary: $input.item.json.checkSummary || 'Not fact-checked.',\n    sources: $input.item.json.sources || []\n  };\n\n  // Advance the state machine so the WordPress and social gates open.\n  sess.stage = 'ARTICLE_READY';\n  staticData['session_' + chatId] = sess;\n}\n\nif (isCompleteArticle) {\n  pushMsg('\\ud83d\\udcf0 *Article Brief*\\n\\n' + metadataBlock, false);\n  pushMsg('\\ud83d\\udd0e *Fact check*\\n\\n' + String($input.item.json.checkSummary || 'Not fact-checked.').replace(/[_*\\[\\]`]/g, ' ') +\n    ($input.item.json.verified === true ? '' : '\\n\\nThis article can be saved as a draft but will not be published.'), false);\n\n  const clean = articleBlock\n    .split('\\n')\n    .filter(function(l) { return !l.trim().match(/^#{1,6}\\s/); })\n    .join('\\n')\n    .replace(/\\n{3,}/g, '\\n\\n')\n    .trim();\n\n  const chunks = chunkText(clean);\n  for (let i = 0; i < chunks.length; i++) {\n    const label = chunks.length > 1\n      ? '\\u270d\\ufe0f *Article Body (' + (i + 1) + '/' + chunks.length + ')*\\n\\n' + chunks[i]\n      : '\\u270d\\ufe0f *Article Body*\\n\\n' + chunks[i];\n    items.push({ json: { chatId: chatId, text: label.slice(0, TELEGRAM_MAX), generateImage: false } });\n  }\n\n  pushMsg('\\ud83d\\udce3 *Next Step*\\n\\n' + seoBlock, true);\n\n} else if (hasBlocks) {\n  const partialText = output\n    .replace(/\\[BLOCK:[^\\]]+\\]/g, '')\n    .replace(/\\[\\/BLOCK\\]/g, '')\n    .trim();\n  pushMsg(partialText || output, false);\n} else {\n  pushMsg(output || 'No response generated.', false);\n}\n\nreturn items.length > 0\n  ? items\n  : [{ json: { chatId: chatId, text: '\\u26a0\\ufe0f No content returned. Please try again.', generateImage: false } }];"
       },
       "id": "7cd39e34-05b2-43d0-be03-e5478bcc23e5",
       "name": "Parse Blocks",
@@ -931,7 +932,7 @@
         "promptType": "define",
         "text": "=Category: {{ $json.category || 'general news' }}\n\nInitial Google News headlines, as a starting point only:\n\n{{ $json.researchInput }}\n\nNow call Google_News_Search_Tool 2-3 times with targeted queries based on these headlines and the category, then return the five TOPIC blocks in the required format.",
         "options": {
-          "systemMessage": "You are a news research assistant for PromoMag.co.uk, a UK current affairs magazine.\n\nYou have access to a tool named Google_News_Search_Tool that queries Google News RSS in real time. You MUST use this tool to find real, current news before responding. Do not rely on your training data for topic suggestions or article facts — always search first.\n\nRESEARCH PROCESS:\n1. Read any headlines already provided to you as context\n2. Call Google_News_Search_Tool 3-4 times with targeted queries to find the most relevant and recent articles. Choose queries that are specific (e.g. \"UK Labour leadership race September 2026\", \"XRP crypto bill US Senate 2026\", \"Bank of England AI regulation 2026\")\n3. Parse the RSS results to extract: headline, source, publication date, and description\n4. Identify the 5 most compelling, newsworthy topics from your combined research\n5. For each topic, extract only facts that appear in the search results — never invent details\n\nSEARCH BUDGET: no more than six tool calls in total across the whole brief. Make each query count — pick the subject and the qualifier deliberately rather than searching broadly and hoping. Exceeding the budget risks exhausting the OpenAI rate limit and losing the entire run.\n\nFIVE DISTINCT STORIES — the supplied headlines cluster heavily around two or three events, and returning the same event under different titles wastes four of the five slots:\n- Each TOPIC must be a different underlying event, decision or dispute. Two topics covering the same announcement from different angles count as one.\n- If your first search yields only two or three distinct stories, use a remaining search on a different sub-subject within the category until you have five.\n- Never fill a slot with a story you cannot support. If a topic's own Key Facts would say that details are unclear, not yet announced or awaited, it is not a story — search for a different one.\n\nKEY FACTS DEPTH — this field is passed to the writer as the sole basis for a full-length article, and a thin dossier is what makes the writer invent. Treat this as the hardest requirement in the brief:\n- Give at least SIX separate factual items per topic, each on its own line prefixed with \"- \".\n- Every item must carry at least one concrete token, or it does not count towards the six:\n  * a figure or amount (money, percentage, count, size, duration)\n  * a specific date or named time period\n  * a named person together with their role or title\n  * a named organisation other than the subject of the topic itself\n  * a phrase quoted verbatim from the source, in quotation marks\n- These do NOT count and must not be listed at all: restatements of the Title; restatements of the Significance text; and vague significance claims of the form \"the decision acknowledges its national importance\", \"the move is seen as a milestone\", \"the announcement has drawn attention\". If an item would still be true with the subject swapped for any other subject in the category, delete it.\n- Prioritise the specific mechanism or decision at issue: what exactly was decided, by whom, under what instrument, taking effect when.\n- Attribute each item to the outlet it came from, in square brackets at the end of the line.\n- If your searches genuinely support fewer than six qualifying items on a topic, drop that topic and use a different story. A topic that cannot supply six concrete facts is not a topic.\n\nTOPIC SELECTION AND ORDER — PromoMag publishes for UK readers and earns search traffic:\n- Prefer stories UK readers are likely to search for this week: national or international significance, a clear decision or development, and named organisations or public figures acting in a public role.\n- Avoid stories of purely local interest (a single venue, council licence or planning application) and celebrity private-life items (health, family, relationships, injuries).\n- Order the five topics strongest first. TOPIC 1 must be the story you would publish if only one could run: the best dossier, the clearest news hook and the widest UK interest. The scheduled run publishes TOPIC 1 without a human choosing.\n\nOUTPUT FORMAT — return EXACTLY this structure. The first line of your reply is TOPIC 1: no introduction, no summary sentence, nothing before it. The TOPIC headers are parsed downstream and must appear verbatim:\n\nTOPIC 1\nTitle: [clear topic title suitable as an article subject]\nSignificance: [why newsworthy right now, 1-2 sentences grounded in what you found]\nKey Facts:\n- [fact carrying a figure] [Source]\n- [fact carrying a date] [Source]\n- [fact naming a person and their role] [Source]\n- [fact naming an organisation] [Source]\n- [verbatim quoted phrase with who said it] [Source]\n- [the specific mechanism or decision at issue] [Source]\nSources: [exact source names from the RSS results]\nDate: [publication date from the RSS results]\n\nTOPIC 2\n[same format]\n\nTOPIC 3\n[same format]\n\nTOPIC 4\n[same format]\n\nTOPIC 5\n[same format]\n\nSTRICT RULES:\n- Always return all five TOPIC blocks, using the literal words TOPIC 1 through TOPIC 5\n- Keep Title:, Significance:, Key Facts:, Sources: and Date: as line-prefixed fields exactly as shown\n- Six or more Key Facts lines per topic, every one carrying a concrete token\n- Only include facts that appeared in the search results\n- Include the source name and date for every fact\n- If a search returns no results, try a different query within the search budget\n- Never say you cannot search — you have Google_News_Search_Tool, use it"
+          "systemMessage": "You are a news research assistant for PromoMag.co.uk, a UK current affairs magazine.\n\nYou have access to a tool named Google_News_Search_Tool that queries Google News RSS in real time. You MUST use this tool to find real, current news before responding. Do not rely on your training data for topic suggestions or article facts — always search first.\n\nRESEARCH PROCESS:\n1. Read any headlines already provided to you as context\n2. Call Google_News_Search_Tool 3-4 times with targeted queries to find the most relevant and recent articles. Choose queries that are specific (e.g. \"UK Labour leadership race September 2026\", \"XRP crypto bill US Senate 2026\", \"Bank of England AI regulation 2026\")\n3. Parse the RSS results to extract: headline, source, publication date, and description\n4. Identify the 5 most compelling, newsworthy topics from your combined research\n5. For each topic, extract only facts that appear in the search results — never invent details\n\nSEARCH BUDGET: no more than six tool calls in total across the whole brief. Make each query count — pick the subject and the qualifier deliberately rather than searching broadly and hoping. Exceeding the budget risks exhausting the OpenAI rate limit and losing the entire run.\n\nFIVE DISTINCT STORIES — the supplied headlines cluster heavily around two or three events, and returning the same event under different titles wastes four of the five slots:\n- Each TOPIC must be a different underlying event, decision or dispute. Two topics covering the same announcement from different angles count as one.\n- If your first search yields only two or three distinct stories, use a remaining search on a different sub-subject within the category until you have five.\n- Never fill a slot with a story you cannot support. If a topic's own Key Facts would say that details are unclear, not yet announced or awaited, it is not a story — search for a different one.\n\nKEY FACTS — these are leads from headlines, not the article's facts:\n- You only see headlines and short descriptions. After a topic is chosen the workflow fetches the full articles and extracts the verified facts from them, so do not stretch thin headlines into detail.\n- List 3 to 6 facts per topic, each stated in a headline or description you actually received, each ending with the outlet in square brackets. Never infer, never combine two headlines into one claim, never add background knowledge.\n- Prefer topics with a clear primary announcement (a company press release, a government publication, a court or regulator decision) that the workflow can find and read in full.\n\nTOPIC SELECTION AND ORDER — PromoMag publishes for UK readers and earns search traffic:\n- Prefer stories UK readers are likely to search for this week: national or international significance, a clear decision or development, and named organisations or public figures acting in a public role.\n- Avoid stories of purely local interest (a single venue, council licence or planning application) and celebrity private-life items (health, family, relationships, injuries).\n- Order the five topics strongest first. TOPIC 1 must be the story you would publish if only one could run: the best dossier, the clearest news hook and the widest UK interest. The scheduled run publishes TOPIC 1 without a human choosing.\n\nOUTPUT FORMAT — return EXACTLY this structure. The first line of your reply is TOPIC 1: no introduction, no summary sentence, nothing before it. The TOPIC headers are parsed downstream and must appear verbatim:\n\nTOPIC 1\nTitle: [clear topic title suitable as an article subject]\nSignificance: [why newsworthy right now, 1-2 sentences grounded in what you found]\nKey Facts:\n- [fact carrying a figure] [Source]\n- [fact carrying a date] [Source]\n- [fact naming a person and their role] [Source]\n- [fact naming an organisation] [Source]\n- [verbatim quoted phrase with who said it] [Source]\n- [the specific mechanism or decision at issue] [Source]\nSources: [exact source names from the RSS results]\nDate: [publication date from the RSS results]\nPrimary: [the organisation or public body that made the announcement]\nSearch: [4-8 word search query that would find the original coverage, e.g. \"Naboo acquires pro-ven\"]\n\nTOPIC 2\n[same format]\n\nTOPIC 3\n[same format]\n\nTOPIC 4\n[same format]\n\nTOPIC 5\n[same format]\n\nSTRICT RULES:\n- Always return all five TOPIC blocks, using the literal words TOPIC 1 through TOPIC 5\n- Keep Title:, Significance:, Key Facts:, Sources:, Date:, Primary: and Search: as line-prefixed fields exactly as shown\n- 3 to 6 Key Facts lines per topic, each taken from a headline or description you received\n- Include the Primary: and Search: lines for every topic\n- Only include facts that appeared in the search results\n- Include the source name and date for every fact\n- If a search returns no results, try a different query within the search budget\n- Never say you cannot search — you have Google_News_Search_Tool, use it"
         }
       },
       "id": "dd281471-0ddd-4978-a0c6-378270cc9a3e",
@@ -1002,7 +1003,7 @@
         "promptType": "define",
         "text": "={{ $json.promptText }}",
         "options": {
-          "systemMessage": "You are the PromoMag.co.uk feature writer. Return ONLY the finished article in the exact block format below. No acknowledgements, no questions, no headings, no ## markers.\n\nSOURCE DISCIPLINE — this governs everything else:\n- The research dossier supplied in the prompt is your only permitted source of fact. Names, dates, figures, organisations, positions, quotations and sequence of events must all appear in it.\n- You may supply connective reasoning, argument and significance. You may not supply what someone said before, what they have historically believed, how the public \"initially\" reacted, prior agreements, or any trend claim about the past. If it reads like a fact and it is not in the dossier, cut it.\n- Do not state a count of anything unless the dossier states that count. If the dossier lists items, list them or say \"the signatories\" — do not tally them yourself. This rule governs the article body. The Coverage line in METADATA is the one place you must count, and there you are counting the dossier and your own paragraphs, not the world.\n- Do not write around a gap with a general statement. If the dossier does not support a point, leave the point out.\n- Never restate a fact in order to fill space. Every paragraph must contain information absent from every earlier paragraph.\n\nLENGTH — structural, not word-counted:\n- Write 9 to 11 paragraphs of roughly 160-200 words each.\n- Every paragraph must be anchored by at least one concrete item from the dossier: a named person, a named organisation, a figure, a date, a quotation, or a specific document or event.\n- If the dossier cannot support 9 anchored paragraphs, write only as many as it can and stop. A grounded 900-word article is correct output; a padded 1,600-word article is a failure.\n\nCOVERAGE — mandatory, no exceptions:\n- Every article carries a Coverage: line inside [BLOCK:METADATA], whether the dossier was rich or thin. Output without that line is malformed.\n- Use exactly this one-line shape:\nCoverage: used N of M dossier facts; P of Q paragraphs anchored; gaps: [what the dossier did not support, or \"none\"]\n- M is the number of separate factual items in the dossier. Q is the number of paragraphs you actually wrote. N and P are your own count.\n- A paragraph counts as anchored only if it carries a person, organisation, figure, date, quotation, document or event that appears in the dossier. Your own connective reasoning is not an anchor, and neither is a fact already anchored in an earlier paragraph.\n- If P is lower than Q, name the unanchored paragraphs in the gaps field and say what the dossier lacked. Do not adjust the numbers to look better — an accurate low count is correct output, an inflated one is a failure.\n\nVOICE:\n- Wall Street Journal register. Continuous narrative, no section headings, no subheadings, no bullet points.\n- Open on the most specific thing in the dossier: a named person doing a dated thing, or a figure. Never on a category or a trend.\n- Take a clear editorial position and argue it from the evidence. Do not balance both sides equally.\n- Attribute as [Source Name, Month Year] where the dossier gives a source. Do not link to news articles.\n- Close on a specific, testable claim about what happens next — a named actor, a decision point, or a date to watch.\n\nBANNED MOVES — these matter more than the phrase list:\n- The abstract summary sentence: any sentence whose subject is \"the debate\", \"the conversation\", \"the movement\", \"the industry\", \"the challenge\", \"the path forward\", \"the journey ahead\", \"the future of X\".\n- The consensus sentence: \"there is a growing consensus / recognition / acknowledgment that...\".\n- The both-sides close: \"balancing progress with prudence\", \"risks and rewards\", \"enhance rather than disrupt\".\n- The watching-world sentence: \"as the world watches\", \"all eyes will be on\", \"will be closely scrutinised\".\n- Empty short sentences used only for rhythm. A short sentence is permitted only when it carries a fact or a judgement.\n- Any sentence that would remain true if this article's subject were swapped for a different subject in the same field. Delete it.\n\nBANNED PHRASES — never use: \"in conclusion\", \"ultimately\", \"it remains to be seen\", \"only time will tell\", \"the implications are significant\", \"the implications are profound\", \"the stakes are high\", \"in a world where\", \"in recent years\", \"in past years\", \"the choices made today\", \"for the greater good\", \"navigating this complex terrain\", \"at the forefront\", \"in the coming months\".\n\nOUTPUT FORMAT — reproduce these markers exactly, including every closing [/BLOCK] tag. A missing [/BLOCK] breaks the workflow:\n\n[BLOCK:METADATA]\nTitle: [SEO-optimised title]\nAuthor: By PromoMag [Category] Desk | [Month Year from CURRENT DATE]\nMeta: [meta description, roughly 150 characters]\nSlug: [url-slug-here]\nTags: [tag1, tag2, tag3, tag4, tag5]\nImage: [a vivid scene description for a photograph — objects, landscapes, architecture or concepts, no people and no faces. Never a filename.]\nCoverage: used N of M dossier facts; P of Q paragraphs anchored; gaps: [what the dossier did not support, or \"none\"]\n[/BLOCK]\n\n[BLOCK:ARTICLE]\n[The article. Continuous prose only.]\n[/BLOCK]\n\n[BLOCK:SEO]\nArticle drafted and saved.\n[/BLOCK]"
+          "systemMessage": "You are the PromoMag.co.uk news writer. Return ONLY the finished article in the exact block format below. No acknowledgements, no questions, no headings, no ## markers.\n\nSOURCE DISCIPLINE — this governs everything else:\n- The VERIFIED DOSSIER in the prompt is your only permitted source of fact. Every name, role, figure, date, quotation, decision and sequence of events must appear in it. Its quotes are the exact source wording; use them to get details right.\n- You may supply connective reasoning and significance. You may not supply background, history, trends, motives or anything you remember about the subject. If it reads like a fact and it is not in the dossier, cut it.\n- If the dossier is silent on a point, omit it. Never write that something is undisclosed, unclear, unknown or remains to be seen unless the dossier's EXPLICITLY NOT DISCLOSED list says so — and then attribute it to that source.\n- Do not characterise timing (\"on the heels of\", \"weeks after\", \"shortly after\", \"follows\", \"recently\") unless both dates are in the dossier and support it. When you mention an earlier event, give the date the dossier gives.\n- Do not state causation or funding links (X funded Y, X enabled Y, X led to Y) unless the dossier states them.\n- Figures: reproduce exactly as the dossier states, including what they cover (domestic vs worldwide, annual vs total, estimate vs final, currency). Never add, convert, round or recombine figures.\n- Attribution of decisions and statements: credit exactly the party the dossier credits.\n- People: use only the role the dossier gives at the time of the event. Never call anyone \"current\" or \"former\" unless the dossier does.\n- Do not state a count of anything unless the dossier states that count.\n\nATTRIBUTION:\n- Attribute in prose: \"according to Business Travel News\", \"Naboo said\", \"the company told EU-Startups\".\n- Never output bracket citation tags such as [Outlet, Month Year], never footnote numbers, never dossier numbering, never URLs. Do not write a Sources line: the workflow appends real source links to the post.\n\nLENGTH:\n- Write as many paragraphs as the dossier supports, typically 5–9. Shorter is better than padded.\n- Every paragraph must carry at least one dossier fact not used in an earlier paragraph. No paragraph of pure commentary.\n\nVOICE:\n- Wall Street Journal register. Continuous narrative, no section headings, no subheadings, no bullet points.\n- Open on the most specific fact in the dossier: a named party doing a dated thing, or a figure.\n- Close on the last substantive fact, or on a next step only if the dossier states one (a date, a decision, a stated plan). Never predict.\n\nBANNED PHRASES — never use: \"on the heels of\", \"remains undisclosed\", \"yet to disclose\", \"it remains to be seen\", \"only time will tell\", \"industry observers\", \"poised to\", \"in conclusion\", \"ultimately\", \"the implications are significant\", \"the stakes are high\", \"in a world where\", \"in recent years\", \"at the forefront\", \"in the coming months\", \"setting a new standard\".\n\nANGLE:\n- Report the story with a clear news angle: lead with what changed and for whom. Any judgement must rest on dossier facts and be framed as analysis, never as a new fact.\n\nOUTPUT FORMAT — reproduce these markers exactly, including every closing [/BLOCK] tag:\n\n[BLOCK:METADATA]\nTitle: [SEO-optimised title, factual, no claims beyond the dossier]\nAuthor: By PromoMag [Category] Desk | [Month Year from CURRENT DATE]\nMeta: [meta description, roughly 150 characters, factual]\nSlug: [url-slug-here]\nTags: [tag1, tag2, tag3, tag4, tag5]\nImage: [a vivid scene description for a photograph — objects, landscapes, architecture or concepts, no people and no faces. Never a filename.]\n[/BLOCK]\n\n[BLOCK:ARTICLE]\n[The article. Continuous prose only. One paragraph per line.]\n[/BLOCK]\n\n[BLOCK:SEO]\nArticle drafted and saved.\n[/BLOCK]"
         }
       },
       "name": "Write Scheduled Article",
@@ -1220,7 +1221,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const chatId = (()=>{try{return $('Telegram Trigger').first().json.message.chat.id}catch(e){}try{return $('Scheduled Config').first().json.chatId}catch(e){}return $getWorkflowStaticData('global')['currentChatId']})();\nconst staticData = $getWorkflowStaticData('global');\nconst article = staticData['article_' + chatId];\n\n// Read publish intent from Detect Stage\nconst isPublish = $('Detect Stage').item.json.isPublish || false;\n\nif (!article) {\n  return [{ json: {\n    chatId: chatId, error: true,\n    errorMsg: '⚠️ *No article found*\\n\\nDraft an article first, then reply *post to WordPress* or *publish to WordPress*.'\n  }}];\n}\n\nreturn [{ json: {\n  chatId: chatId, error: false,\n  title: article.title || 'Untitled Article',\n  content: article.content || '',\n  slug: article.slug || '',\n  excerpt: article.excerpt || '',\n  tags: article.tags || '',\n  category: article.category || 'uncategorized',\n  wpMediaId: article.wpMediaId || 0,\n  isPublish: isPublish\n}}];"
+        "jsCode": "const chatId = (()=>{try{return $('Telegram Trigger').first().json.message.chat.id}catch(e){}try{return $('Scheduled Config').first().json.chatId}catch(e){}return $getWorkflowStaticData('global')['currentChatId']})();\nconst staticData = $getWorkflowStaticData('global');\nconst article = staticData['article_' + chatId];\n\n// Read publish intent from Detect Stage\nconst isPublish = $('Detect Stage').item.json.isPublish || false;\n\nif (!article) {\n  return [{ json: {\n    chatId: chatId, error: true,\n    errorMsg: '⚠️ *No article found*\\n\\nDraft an article first, then reply *post to WordPress* or *publish to WordPress*.'\n  }}];\n}\n\nreturn [{ json: {\n  chatId: chatId, error: false,\n  title: article.title || 'Untitled Article',\n  content: article.content || '',\n  slug: article.slug || '',\n  excerpt: article.excerpt || '',\n  tags: article.tags || '',\n  category: article.category || 'uncategorized',\n  wpMediaId: article.wpMediaId || 0,\n  isPublish: isPublish,\n  // Articles stored before the fact check existed have no verdict and can only be saved as drafts.\n  verified: article.verified === true,\n  checkSummary: article.checkSummary || 'Not fact-checked.',\n  sources: article.sources || []\n}}];"
       },
       "id": "8dce4b79-577d-478f-9b4d-6d966d937815",
       "name": "Retrieve Stored Article",
@@ -1306,7 +1307,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const chatId = (()=>{try{return $('Telegram Trigger').first().json.message.chat.id}catch(e){}try{return $('Scheduled Config').first().json.chatId}catch(e){}return $getWorkflowStaticData('global')['currentChatId']})();\nconst sd = $getWorkflowStaticData('global');\nconst s = sd['session_' + chatId] || {};\nconst raw = (()=>{try{return $('Detect Stage').first().json.originalText || ''}catch(e){return ''}})();\nconst topics = sd['researchTopics_' + chatId] || [];\n\n// Topics were parsed and validated once, in Parse Research Output. Nothing stored means there is\n// nothing to pick from - fail loudly rather than let the writer invent an article.\nif (!topics.length) {\n  throw new Error('No researched topics stored for chat ' + chatId + '. Send /reset and choose the category again.');\n}\n\n// Resolve the pick: a number first, then a loose title match, then fall back to the first.\nlet idx = -1;\nconst num = raw.match(/[1-9]/);\nif (num) idx = parseInt(num[0], 10) - 1;\nif (idx < 0 || idx >= topics.length) {\n  const lower = raw.toLowerCase();\n  idx = topics.findIndex(t => lower.includes(String(t.title).toLowerCase().slice(0, 20)));\n}\nif (idx < 0 || idx >= topics.length) idx = 0;\n\nconst topic = topics[idx];\ns.topicTitle = topic.title;\nsd['session_' + chatId] = s;\nsd['topicBrief_' + chatId] = topic.body;\n\nconst promptText = 'Topic: ' + topic.title + '\\n\\n[RESEARCH]\\n' + topic.body;\nreturn [{ json: { chatId, promptText, topicTitle: topic.title } }];\n"
+        "jsCode": "const chatId = (()=>{try{return $('Telegram Trigger').first().json.message.chat.id}catch(e){}try{return $('Scheduled Config').first().json.chatId}catch(e){}return $getWorkflowStaticData('global')['currentChatId']})();\nconst sd = $getWorkflowStaticData('global');\nconst s = sd['session_' + chatId] || {};\nconst raw = (()=>{try{return $('Detect Stage').first().json.originalText || ''}catch(e){return ''}})();\nconst topics = sd['researchTopics_' + chatId] || [];\n\n// Topics were parsed and validated once, in Parse Research Output. Nothing stored means there is\n// nothing to pick from - fail loudly rather than let the writer invent an article.\nif (!topics.length) {\n  throw new Error('No researched topics stored for chat ' + chatId + '. Send /reset and choose the category again.');\n}\n\n// Resolve the pick: a number first, then a loose title match, then fall back to the first.\nlet idx = -1;\nconst num = raw.match(/[1-9]/);\nif (num) idx = parseInt(num[0], 10) - 1;\nif (idx < 0 || idx >= topics.length) {\n  const lower = raw.toLowerCase();\n  idx = topics.findIndex(t => lower.includes(String(t.title).toLowerCase().slice(0, 20)));\n}\nif (idx < 0 || idx >= topics.length) idx = 0;\n\nconst topic = topics[idx];\ns.topicTitle = topic.title;\ns.topicNumber = idx + 1;\nsd['session_' + chatId] = s;\n// The headline-level brief is no longer handed to the writer; the verified dossier replaces it.\ndelete sd['topicBrief_' + chatId];\ndelete sd['dossier_' + chatId];\n\nreturn [{ json: { chatId, isScheduled: false, topic, topicNumber: idx + 1 } }];\n"
       },
       "name": "Build ToC Prompt",
       "type": "n8n-nodes-base.code",
@@ -1364,7 +1365,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Category and chat come from the Config node; this node only decides today's category.\nconst cfg = $('Config').first().json.cfg;\nconst now = new Date();\nconst dayOfYear = Math.floor((Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) - Date.UTC(now.getUTCFullYear(), 0, 0)) / 86400000);\nconst slug = cfg.scheduleRotation[dayOfYear % cfg.scheduleRotation.length];\nconst c = cfg.categories[slug];\nif (!c) throw new Error('scheduleRotation names an unknown category: ' + slug);\n\n// Legacy keys still read as last-resort fallbacks by shared nodes within this same execution.\nconst sd = $getWorkflowStaticData('global');\nsd['currentChatId'] = cfg.ownerChatId;\nsd['currentNewsQuery'] = c.query;\nsd['researchDate_' + cfg.ownerChatId] = now.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });\n\nreturn [{ json: {\n  chatId: cfg.ownerChatId,\n  isScheduled: true,\n  newsQuery: c.query,\n  categorySlug: slug,\n  categoryLabel: c.label,\n  categoryId: c.wpId\n}}];\n"
+        "jsCode": "// Category and chat come from the Config node; this node only decides today's category.\nconst cfg = $('Config').first().json.cfg;\nconst now = new Date();\n\n// The test topic applies only to a manual run, so leaving it set can never change the 07:00 run.\nconst useTestTopic = $execution.mode === 'manual' && !!cfg.testTopic;\n\nconst dayOfYear = Math.floor((Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) - Date.UTC(now.getUTCFullYear(), 0, 0)) / 86400000);\nconst slug = useTestTopic ? cfg.testTopic.category : cfg.scheduleRotation[dayOfYear % cfg.scheduleRotation.length];\nconst c = cfg.categories[slug];\nif (!c) throw new Error('Unknown category: ' + slug);\n\n// Legacy keys still read as last-resort fallbacks by shared nodes within this same execution.\nconst sd = $getWorkflowStaticData('global');\nsd['currentChatId'] = cfg.ownerChatId;\nsd['currentNewsQuery'] = c.query;\nsd['researchDate_' + cfg.ownerChatId] = now.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });\n\nreturn [{ json: {\n  chatId: cfg.ownerChatId,\n  isScheduled: true,\n  useTestTopic,\n  newsQuery: c.query,\n  categorySlug: slug,\n  categoryLabel: c.label,\n  categoryId: c.wpId\n}}];\n"
       },
       "name": "Scheduled Config",
       "type": "n8n-nodes-base.code",
@@ -1377,7 +1378,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Scheduled runs take TOPIC 1 - the Research Agent is told to rank strongest first.\nconst cfg = $('Scheduled Config').first().json;\nconst research = $('Parse Research Output').first().json;\nconst topics = research.topics || [];\nif (!topics.length) {\n  throw new Error('Scheduled run: research produced no usable topics. ' + (research.researchError || 'The agent returned no parsable TOPIC blocks.'));\n}\n\nconst topic = topics[0];\nconst date = $getWorkflowStaticData('global')['researchDate_' + cfg.chatId] || new Date().toDateString();\n\nconst promptText =\n  '[CURRENT DATE: ' + date + ']\\n\\n' +\n  'Write the complete article now for the topic below. Do not ask questions, do not send a table of ' +\n  'contents, do not acknowledge. Return the finished article starting with [BLOCK:METADATA].\\n\\n' +\n  'Category: ' + cfg.categoryLabel + '\\n' +\n  'Selected topic: ' + topic.title + '\\n\\n' +\n  '[LIVE RESEARCH BRIEF - every fact must come from here. Do not invent details:]\\n\\n' + topic.body;\n\nreturn [{ json: { promptText, chatId: cfg.chatId, topicTitle: topic.title } }];\n"
+        "jsCode": "// Scheduled runs take TOPIC 1 - the Research Agent is told to rank strongest first. A manual test\n// run takes the Config test topic instead and skips research entirely.\nconst cfg = $('Scheduled Config').first().json;\nlet topic;\nif (cfg.useTestTopic) {\n  const t = $('Config').first().json.cfg.testTopic;\n  topic = { title: t.title, body: 'Title: ' + t.title + '\\nPrimary: ' + t.primary + '\\nSearch: ' + t.search };\n} else {\n  const research = $('Parse Research Output').first().json;\n  const topics = research.topics || [];\n  if (!topics.length) {\n    throw new Error('Scheduled run: research produced no usable topics. ' + (research.researchError || 'The agent returned no parsable TOPIC blocks.'));\n  }\n  topic = topics[0];\n}\nreturn [{ json: { chatId: cfg.chatId, isScheduled: true, topic } }];\n"
       },
       "name": "Auto-Select Top Topic",
       "type": "n8n-nodes-base.code",
@@ -1390,7 +1391,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const cfg = $('Scheduled Config').first().json;\nconst topicTitle = $('Auto-Select Top Topic').first().json.topicTitle;\nconst output = $input.first().json.output || '';\n\n// Bound each block at [/BLOCK] or the next [BLOCK:, whichever comes first.\nconst block = (tag) => {\n  const open = '[BLOCK:' + tag + ']';\n  const s = output.indexOf(open);\n  if (s === -1) return '';\n  const cs = s + open.length;\n  const ends = [output.indexOf('[/BLOCK]', cs), output.indexOf('[BLOCK:', cs)].filter(i => i !== -1);\n  return output.slice(cs, ends.length ? Math.min(...ends) : output.length).trim();\n};\nconst field = (b, f) => { for (const l of String(b).split('\\n')) if (l.trim().startsWith(f + ':')) return l.trim().slice(f.length + 1).trim(); return ''; };\n\nconst meta = block('METADATA'), body = block('ARTICLE');\nif (!meta || !body) throw new Error('Scheduled draft missing [BLOCK:METADATA] or [BLOCK:ARTICLE].');\n\nconst title = field(meta, 'Title') || topicTitle || 'Untitled';\n\n// Content stays as plain paragraphs; Prepare Post converts to HTML for both paths.\nreturn [{ json: {\n  chatId: cfg.chatId,\n  title,\n  content: body,\n  slug: field(meta, 'Slug') || title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60),\n  excerpt: field(meta, 'Meta'),\n  tags: field(meta, 'Tags'),\n  imageDescription: field(meta, 'Image'),\n  coverage: field(meta, 'Coverage'),\n  category: cfg.categorySlug,\n  categoryLabel: cfg.categoryLabel,\n  categoryId: cfg.categoryId,\n  wpMediaId: 0\n}}];\n"
+        "jsCode": "const cfg = $('Scheduled Config').first().json;\nconst topicTitle = $('Build Scheduled Prompt').first().json.topicTitle;\nconst output = String($json.output || '');\n\n// Bound each block at [/BLOCK] or the next [BLOCK:, whichever comes first.\nconst block = (tag) => {\n  const open = '[BLOCK:' + tag + ']';\n  const s = output.indexOf(open);\n  if (s === -1) return '';\n  const cs = s + open.length;\n  const ends = [output.indexOf('[/BLOCK]', cs), output.indexOf('[BLOCK:', cs)].filter(i => i !== -1);\n  return output.slice(cs, ends.length ? Math.min(...ends) : output.length).trim();\n};\nconst field = (b, f) => { for (const l of String(b).split('\\n')) if (l.trim().startsWith(f + ':')) return l.trim().slice(f.length + 1).trim(); return ''; };\n\nconst meta = block('METADATA'), body = block('ARTICLE');\nif (!meta || !body) throw new Error('Scheduled draft missing [BLOCK:METADATA] or [BLOCK:ARTICLE].');\n\nconst title = field(meta, 'Title') || topicTitle || 'Untitled';\n\n// Content stays as plain paragraphs; Prepare Post converts to HTML for both paths.\nreturn [{ json: {\n  chatId: cfg.chatId,\n  title,\n  content: body,\n  slug: field(meta, 'Slug') || title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60),\n  excerpt: field(meta, 'Meta'),\n  tags: field(meta, 'Tags'),\n  imageDescription: field(meta, 'Image'),\n  category: cfg.categorySlug,\n  categoryLabel: cfg.categoryLabel,\n  categoryId: cfg.categoryId,\n  wpMediaId: 0,\n  verified: $json.verified === true,\n  checkSummary: $json.checkSummary || 'Not fact-checked.',\n  sources: $json.sources || []\n}}];\n"
       },
       "name": "Parse Scheduled Blocks",
       "type": "n8n-nodes-base.code",
@@ -1428,7 +1429,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Runs once the image step finishes or fails; a scheduled draft goes to approval either way.\nconst art = $('Parse Scheduled Blocks').first().json;\nconst wpMediaId = Number($json.wpMediaId) || 0;\nconst mdSafe = (s) => String(s || '').replace(/[_*\\[\\]`]/g, ' ').replace(/\\s+/g, ' ').trim();\n\n// The Wait node's resume URL carries no authentication of its own, so a forwarded message or a\n// screenshot would let anyone publish. Mint a single-use token and require it on resume.\nconst approvalToken = Array.from({ length: 4 }, () => Math.random().toString(36).slice(2, 10)).join('');\n\nreturn [{ json: {\n  ...art,\n  wpMediaId,\n  approvalToken,\n  safeTitle: mdSafe(art.title),\n  safeExcerpt: mdSafe(art.excerpt).slice(0, 300),\n  safeCoverage: mdSafe(art.coverage) || 'not reported',\n  imageNote: wpMediaId ? 'Featured image attached.' : 'No featured image - add one after publishing with: image <search term>'\n}}];\n"
+        "jsCode": "// Runs once the image step finishes or fails; a scheduled draft goes to approval either way.\nconst art = $('Parse Scheduled Blocks').first().json;\nconst wpMediaId = Number($json.wpMediaId) || 0;\nconst mdSafe = (s) => String(s || '').replace(/[_*\\[\\]`]/g, ' ').replace(/\\s+/g, ' ').trim();\n\n// The Wait node's resume URL carries no authentication of its own, so a forwarded message or a\n// screenshot would let anyone publish. Mint a single-use token and require it on resume.\nconst approvalToken = Array.from({ length: 4 }, () => Math.random().toString(36).slice(2, 10)).join('');\n\nreturn [{ json: {\n  ...art,\n  wpMediaId,\n  approvalToken,\n  safeTitle: mdSafe(art.title),\n  safeExcerpt: mdSafe(art.excerpt).slice(0, 300),\n  safeCheck: mdSafe(art.checkSummary),\n  publishNote: art.verified ? '' : '\\u26d4 Publish now will save it as a WordPress DRAFT only - the fact check did not pass.',\n  imageNote: wpMediaId ? 'Featured image attached.' : 'No featured image - add one after publishing with: image <search term>'\n}}];\n"
       },
       "name": "Sched Store Media",
       "type": "n8n-nodes-base.code",
@@ -1442,7 +1443,7 @@
     {
       "parameters": {
         "chatId": "={{ $json.chatId }}",
-        "text": "=📰 *Scheduled draft ready — {{ $json.categoryLabel }}*\n\n*{{ $json.safeTitle }}*\n\n{{ $json.safeExcerpt }}\n\nCoverage: {{ $json.safeCoverage }}\n{{ $json.imageNote }}\n\n⚠️ Nothing has been posted to PromoMag yet. Tap *Publish now* to go live, or *Let me tailor it* to keep the draft and rework it in chat. No response within 6 hours and the draft is discarded.",
+        "text": "=📰 *Scheduled draft ready — {{ $json.categoryLabel }}*\n\n*{{ $json.safeTitle }}*\n\n{{ $json.safeExcerpt }}\n\n🔎 {{ $json.safeCheck }}\n{{ $json.publishNote }}\n{{ $json.imageNote }}\n\n⚠️ Nothing has been posted to PromoMag yet. Tap *Publish now* to go live, or *Let me tailor it* to keep the draft and rework it in chat. No response within 6 hours and the draft is discarded.",
         "replyMarkup": "inlineKeyboard",
         "inlineKeyboard": {
           "rows": [
@@ -1489,7 +1490,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Read the draft from this execution's run data. Static data is not reliable after a Wait resumes:\n// in v22 it came back empty, so the dropped notice had no chat ID and the run errored.\nconst draft = $('Sched Store Media').first().json;\nconst q = ($input.first().json || {}).query || {};\n\nconst tokenOk = !!draft.approvalToken && String(q.token || '') === draft.approvalToken;\n// A missing or wrong token is treated exactly like no approval at all: the draft is dropped.\nconst action = tokenOk ? String(q.action || '').toLowerCase() : '';\nconst approved = action === 'publish' || action === 'tailor';\n\nif (action === 'tailor') {\n  // Hand the draft to the interactive session so \"post to WordPress\" works on it.\n  const sd = $getWorkflowStaticData('global');\n  sd['article_' + draft.chatId] = {\n    title: draft.title, slug: draft.slug, excerpt: draft.excerpt, tags: draft.tags,\n    imageDescription: draft.imageDescription, content: draft.content, category: draft.category,\n    wpMediaId: draft.wpMediaId, wpMediaUrl: null\n  };\n  const s = sd['session_' + draft.chatId] || {};\n  s.stage = 'ARTICLE_READY';\n  s.topicTitle = draft.title;\n  s.category = s.category || { label: draft.categoryLabel, slug: draft.category, wpId: draft.categoryId };\n  sd['session_' + draft.chatId] = s;\n}\n\nreturn [{ json: { ...draft, action, approved, isPublish: action === 'publish', tokenOk, source: 'scheduled' } }];\n"
+        "jsCode": "// Read the draft from this execution's run data. Static data is not reliable after a Wait resumes:\n// in v22 it came back empty, so the dropped notice had no chat ID and the run errored.\nconst draft = $('Sched Store Media').first().json;\nconst q = ($input.first().json || {}).query || {};\n\nconst tokenOk = !!draft.approvalToken && String(q.token || '') === draft.approvalToken;\n// A missing or wrong token is treated exactly like no approval at all: the draft is dropped.\nconst action = tokenOk ? String(q.action || '').toLowerCase() : '';\nconst approved = action === 'publish' || action === 'tailor';\n\nif (action === 'tailor') {\n  // Hand the draft to the interactive session so \"post to WordPress\" works on it.\n  const sd = $getWorkflowStaticData('global');\n  sd['article_' + draft.chatId] = {\n    title: draft.title, slug: draft.slug, excerpt: draft.excerpt, tags: draft.tags,\n    imageDescription: draft.imageDescription, content: draft.content, category: draft.category,\n    wpMediaId: draft.wpMediaId, wpMediaUrl: null,\n    verified: draft.verified === true, checkSummary: draft.checkSummary, sources: draft.sources || []\n  };\n  const s = sd['session_' + draft.chatId] || {};\n  s.stage = 'ARTICLE_READY';\n  s.topicTitle = draft.title;\n  s.category = s.category || { label: draft.categoryLabel, slug: draft.category, wpId: draft.categoryId };\n  sd['session_' + draft.chatId] = s;\n}\n\nreturn [{ json: { ...draft, action, approved, isPublish: action === 'publish', tokenOk, source: 'scheduled' } }];\n"
       },
       "name": "Approval Router",
       "type": "n8n-nodes-base.code",
@@ -1837,7 +1838,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Single entry to publishing for both paths: interactive (from Retrieve Stored Article) and\n// scheduled (from Approval Router). Everything downstream reads this node's output.\nconst cfg = $('Config').first().json.cfg;\nconst j = $json;\nconst isScheduled = j.source === 'scheduled';\n\nconst categoryId = j.categoryId || (cfg.categories[j.category] || {}).wpId || cfg.defaultCategoryId;\n\nconst toHtml = (raw) => String(raw || '')\n  .split('\\n')\n  .filter(line => !line.trim().match(/^#{1,6}\\s/))\n  .join('\\n')\n  .replace(/\\*\\*(.+?)\\*\\*/g, '<strong>$1</strong>')\n  .replace(/(?<!\\*)\\*([^*\\n]+)\\*(?!\\*)/g, '<em>$1</em>')\n  .replace(/^>\\s?(.+)/gm, '<blockquote>$1</blockquote>')\n  // The scheduled writer separates paragraphs with single newlines, the interactive one with blank lines.\n  .split(isScheduled ? /\\n+/ : /\\n\\n+/)\n  .map(para => {\n    const t = para.trim();\n    if (!t) return '';\n    if (t.startsWith('<blockquote>') || t.startsWith('<p>')) return t;\n    return '<p>' + t.replace(/\\n/g, '<br>') + '</p>';\n  })\n  .filter(Boolean)\n  .join('\\n\\n');\n\nreturn [{ json: {\n  chatId: j.chatId,\n  source: isScheduled ? 'scheduled' : 'interactive',\n  title: j.title || 'Untitled Article',\n  content: toHtml(j.content),\n  slug: j.slug || '',\n  excerpt: j.excerpt || '',\n  tags: j.tags || '',\n  categoryId,\n  wpMediaId: Number(j.wpMediaId) || 0,\n  status: j.isPublish ? 'publish' : 'draft'\n}}];\n"
+        "jsCode": "// Single entry to publishing for both paths: interactive (from Retrieve Stored Article) and\n// scheduled (from Approval Router). Everything downstream reads this node's output.\nconst cfg = $('Config').first().json.cfg;\nconst j = $json;\nconst isScheduled = j.source === 'scheduled';\n\nconst categoryId = j.categoryId || (cfg.categories[j.category] || {}).wpId || cfg.defaultCategoryId;\n\nconst toHtml = (raw) => String(raw || '')\n  .split('\\n')\n  .filter(line => !line.trim().match(/^#{1,6}\\s/))\n  .join('\\n')\n  .replace(/\\*\\*(.+?)\\*\\*/g, '<strong>$1</strong>')\n  .replace(/(?<!\\*)\\*([^*\\n]+)\\*(?!\\*)/g, '<em>$1</em>')\n  .replace(/^>\\s?(.+)/gm, '<blockquote>$1</blockquote>')\n  // The scheduled writer separates paragraphs with single newlines, the interactive one with blank lines.\n  .split(isScheduled ? /\\n+/ : /\\n\\n+/)\n  .map(para => {\n    const t = para.trim();\n    if (!t) return '';\n    if (t.startsWith('<blockquote>') || t.startsWith('<p>')) return t;\n    return '<p>' + t.replace(/\\n/g, '<br>') + '</p>';\n  })\n  .filter(Boolean)\n  .join('\\n\\n');\n\n// Source links come from the fetched URLs, never from the model.\nconst esc = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;');\nconst sources = (j.sources || []).filter(s => /^https?:\\/\\//i.test(s.url || ''));\nconst sourcesHtml = sources.length\n  ? '\\n\\n<p><em>Sources: ' + sources.map(s => '<a href=\"' + esc(s.url) + '\" rel=\"noopener\">' + esc(s.outlet || new URL(s.url).hostname) + '</a>').join('; ') + '.</em></p>'\n  : '';\nconst content = toHtml(j.content) + sourcesHtml;\n\n// Hard gates: an article that fails any of these can be saved as a draft but never published.\nconst BRACKET_TAG = /\\[[A-Z][^\\]]+,\\s+\\w+\\s+\\d{4}\\]/;\nconst blockers = [];\nif (j.verified !== true) blockers.push('the fact check did not pass (' + (j.checkSummary || 'not fact-checked') + ')');\nif (BRACKET_TAG.test(j.content || '')) blockers.push('the text contains bracket citation tags');\nif (!sources.length) blockers.push('there are no source links');\nconst wantsPublish = !!j.isPublish;\nconst status = wantsPublish && !blockers.length ? 'publish' : 'draft';\n\n// WordPress compares sanitised slugs, so sanitise before the duplicate check.\nconst slug = String(j.slug || j.title || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);\n\nreturn [{ json: {\n  chatId: j.chatId,\n  source: isScheduled ? 'scheduled' : 'interactive',\n  title: j.title || 'Untitled Article',\n  content,\n  slug,\n  excerpt: j.excerpt || '',\n  tags: j.tags || '',\n  categoryId,\n  wpMediaId: Number(j.wpMediaId) || 0,\n  status,\n  forcedDraftReason: wantsPublish && status === 'draft' ? blockers.join('; ') : ''\n}}];\n"
       },
       "name": "Prepare Post",
       "type": "n8n-nodes-base.code",
@@ -1906,7 +1907,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Create WP Tag runs with fullResponse, so a new tag arrives as { body: { id } } and an existing\n// one as a 400 term_exists error whose term_id may only be inside a stringified message.\nreturn $input.all().map(item => {\n  const j = item.json || {};\n  const b = j.body || j;\n  let tagId = b.id || (b.data && b.data.term_id) || (j.error && j.error.data && j.error.data.term_id) || null;\n  if (!tagId && j.error) {\n    const raw = typeof j.error === 'string' ? j.error : (j.error.message || JSON.stringify(j.error));\n    const m = String(raw).match(/\"term_id\"\\s*:\\s*(\\d+)/);\n    if (m) tagId = parseInt(m[1], 10);\n  }\n  return { json: { tagId } };\n});\n"
+        "jsCode": "// Create WP Tag runs with fullResponse, so a new tag arrives as { body: { id } } and an existing\n// one as a 400 term_exists error whose term_id may only be inside a stringified message.\nreturn $input.all().map(item => {\n  const j = item.json || {};\n  const b = j.body || j;\n  let tagId = b.id || (b.data && b.data.term_id) || (j.error && j.error.data && j.error.data.term_id) || null;\n  if (!tagId && j.error) {\n    const raw = typeof j.error === 'string' ? j.error : (j.error.message || JSON.stringify(j.error));\n    // The message is a JSON string inside a string, so the quotes arrive escaped (\\\"term_id\\\":5431);\n    // the old /\"term_id\":/ pattern never matched and every existing tag was dropped.\n    const m = String(raw).match(/term_id\\W{0,4}:\\s*(\\d+)/);\n    if (m) tagId = parseInt(m[1], 10);\n  }\n  return { json: { tagId } };\n});\n"
       },
       "name": "Extract Tag ID",
       "type": "n8n-nodes-base.code",
@@ -1934,7 +1935,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const p = $('Prepare Post').first().json;\nconst tagIds = [...new Set(($json.tagItems || []).map(i => i.tagId).filter(Boolean))];\nreturn [{ json: { ...p, tagIds } }];\n"
+        "jsCode": "const p = $('Decide Post Action').first().json;\nconst tagIds = [...new Set(($json.tagItems || []).map(i => i.tagId).filter(Boolean))];\nreturn [{ json: { ...p, tagIds } }];\n"
       },
       "name": "Build Post Payload",
       "type": "n8n-nodes-base.code",
@@ -1948,7 +1949,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "https://promomag.co.uk/wp-json/wp/v2/posts",
+        "url": "={{ $json.existingId ? 'https://promomag.co.uk/wp-json/wp/v2/posts/' + $json.existingId : 'https://promomag.co.uk/wp-json/wp/v2/posts' }}",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpBasicAuth",
         "sendHeaders": true,
@@ -1991,7 +1992,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const p = $('Prepare Post').first().json;\nconst j = $json || {};\nconst body = j.body || j;\nconst mdSafe = (s) => String(s || '').replace(/[_*\\[\\]`]/g, ' ').replace(/\\s+/g, ' ').trim();\n\nif (j.error || !body.id) {\n  const err = j.error ? (j.error.message || JSON.stringify(j.error)) : JSON.stringify(j);\n  const retryHint = p.source === 'scheduled'\n    ? 'The draft was not posted. Re-run the workflow or write it again from Telegram.'\n    : 'The article is still stored. Reply *post to WordPress* to retry.';\n  return [{ json: { chatId: p.chatId, text: '⚠️ *WordPress Post Failed*\\n\\n' + retryHint + '\\n\\nError: ' + mdSafe(err).slice(0, 200) } }];\n}\n\nconst postId = body.id;\nconst link = body.link || ('https://promomag.co.uk/?p=' + postId);\nconst edit = 'https://promomag.co.uk/wp-admin/post.php?post=' + postId + '&action=edit';\nconst text = body.status === 'publish'\n  ? '🚀 *Published on PromoMag*\\n\\n' + mdSafe(p.title) + '\\n\\n🔗 [View Article](' + link + ')\\n🔗 [Edit in WP Admin](' + edit + ')'\n  : '✅ *Saved as draft on PromoMag*\\n\\n' + mdSafe(p.title) + '\\n\\n🔗 [Open in WP Admin](' + edit + ')\\n\\n_Review and publish when ready._';\n\nreturn [{ json: { chatId: p.chatId, text, postId, link, status: body.status } }];\n"
+        "jsCode": "const p = $('Decide Post Action').first().json;\nconst mdSafe = (s) => String(s || '').replace(/[_*\\[\\]`]/g, ' ').replace(/\\s+/g, ' ').trim();\n\nif (p.action === 'abort') {\n  return [{ json: { chatId: p.chatId, text: '⚠️ *Not posted*\\n\\n' + mdSafe(p.title) + '\\n\\nReason: ' + mdSafe(p.abortReason) +\n    (p.existingLink ? '\\n\\n🔗 [Existing post](' + p.existingLink + ')' : '') } }];\n}\n\nconst j = $json || {};\nconst body = j.body || j;\nif (j.error || !body.id) {\n  const err = j.error ? (j.error.message || JSON.stringify(j.error)) : JSON.stringify(j);\n  const retryHint = p.source === 'scheduled'\n    ? 'The draft was not posted. Re-run the workflow or write it again from Telegram.'\n    : 'The article is still stored. Reply *post to WordPress* to retry.';\n  return [{ json: { chatId: p.chatId, text: '⚠️ *WordPress Post Failed*\\n\\n' + retryHint + '\\n\\nError: ' + mdSafe(err).slice(0, 200) } }];\n}\n\nconst postId = body.id;\nconst link = body.link || ('https://promomag.co.uk/?p=' + postId);\nconst edit = 'https://promomag.co.uk/wp-admin/post.php?post=' + postId + '&action=edit';\nconst verb = p.action === 'update' ? 'updated' : 'saved';\nlet text = body.status === 'publish'\n  ? '🚀 *Published on PromoMag*\\n\\n' + mdSafe(p.title) + '\\n\\n🔗 [View Article](' + link + ')\\n🔗 [Edit in WP Admin](' + edit + ')'\n  : '✅ *Draft ' + verb + ' on PromoMag*\\n\\n' + mdSafe(p.title) + '\\n\\n🔗 [Open in WP Admin](' + edit + ')\\n\\n_Review and publish when ready._';\nif (p.forcedDraftReason) text += '\\n\\n⛔ *Kept as a draft, not published:* ' + mdSafe(p.forcedDraftReason);\nif (p.action === 'update') text += '\\n\\nUpdated the existing draft (ID ' + postId + ') instead of creating a duplicate.';\n\nreturn [{ json: { chatId: p.chatId, text, postId, link, status: body.status } }];\n"
       },
       "name": "Format Publish Result",
       "type": "n8n-nodes-base.code",
@@ -2030,9 +2031,9 @@
     {
       "parameters": {
         "width": 760,
-        "height": 520,
+        "height": 640,
         "color": 4,
-        "content": "## [PROMOMAG] Generate article (telegram + schedule) v23\n**Owner:** Jonathan · **Purpose:** research, write, illustrate and publish PromoMag.co.uk articles.\n\n**Triggers**\n- Telegram bot (owner only): category → 5 researched topics → outline → stance → article → image → post/publish. Also `image <term>`, `/status`, `/reset`, `social`.\n- Daily 07:00 schedule: rotates category, publishes the top-ranked topic after Telegram approval (6h window).\n\n**Settings:** chat IDs, categories and the schedule rotation live in the **Config** node only.\n\n**Shared steps:** both triggers use the same research, image (Pixabay → DALL-E fallback → WP media) and publish (tags → WP post) chains.\n\n**Downstream:** WordPress REST (n8n PromoMag), OpenAI, Pixabay (key inline in *Fetch Pixabay API* until moved to a credential), Telegram, sub-workflow *PromoMag Featured Image Swap*.\n\n**Errors:** unhandled failures alert via *[SHARED] Error handler*. Source of truth: GitHub Shino007/n8n-workflows."
+        "content": "## [PROMOMAG] Generate article (telegram + schedule) v23\n**Owner:** Jonathan · **Purpose:** research, write, illustrate and publish PromoMag.co.uk articles.\n\n**Triggers**\n- Telegram bot (owner only): category → 5 researched topics → outline → stance → article → image → post/publish. Also `image <term>`, `/status`, `/reset`, `social`.\n- Daily 07:00 schedule: rotates category, publishes the top-ranked topic after Telegram approval (6h window).\n\n**Settings:** chat IDs, categories and the schedule rotation live in the **Config** node only.\n\n**Accuracy pipeline:** topic → Bing search for real article URLs → full text via reader (Config `research`) → dossier extraction with verbatim quotes, checked in code → writer (Writer LLM, temp 0.3) → fact check against the source text → one auto-revision → second check. Unverified articles can be saved as drafts but never published. Manual runs from the Schedule Trigger use Config `testTopic`.\n\n**Shared steps:** both triggers use the same research, image (Pixabay → DALL-E fallback → WP media) and publish (tags → WP post) chains.\n\n**Downstream:** WordPress REST (n8n PromoMag), OpenAI, Pixabay (key inline in *Fetch Pixabay API* until moved to a credential), Telegram, sub-workflow *PromoMag Featured Image Swap*.\n\n**Errors:** unhandled failures alert via *[SHARED] Error handler*. Source of truth: GitHub Shino007/n8n-workflows."
       },
       "name": "Overview",
       "type": "n8n-nodes-base.stickyNote",
@@ -2042,6 +2043,771 @@
         -600
       ],
       "id": "ad2246de-c554-449a-9302-ef481f76df9d"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Two searches per topic: the story itself, and the primary announcement. Bing's RSS endpoints are\n// used because they return the publishers' real URLs; Google News only returns redirect links that\n// cannot be resolved without a browser.\nconst j = $json;\nconst topic = j.topic || {};\nconst field = (name) => ((String(topic.body || '').match(new RegExp('^[ \\\\t*_-]*' + name + '[*_]*\\\\s*:[*_]*\\\\s*(.+)$', 'im')) || [])[1] || '').trim();\nconst clean = (s) => String(s || '').replace(/[\"\\[\\]]/g, ' ').replace(/\\s+/g, ' ').trim();\n\nconst story = clean(field('Search') || topic.title);\nconst primary = clean(field('Primary'));\nconst queries = [\n  { kind: 'news', url: 'https://www.bing.com/news/search?format=rss&mkt=en-GB&q=' + encodeURIComponent(story) },\n  { kind: 'web', url: 'https://www.bing.com/search?format=rss&mkt=en-GB&q=' + encodeURIComponent(\n      (primary && !/unknown/i.test(primary) ? primary + ' ' : '') + story + ' announcement') }\n];\n\nreturn queries.map(q => ({ json: { ...q, chatId: j.chatId, isScheduled: !!j.isScheduled, topicTitle: topic.title,\n  primary, sourcesLine: field('Sources') } }));\n"
+      },
+      "name": "Build Source Search",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "id": "254fb4ca-1a8b-43ec-bb41-2e9d05b6c81d",
+      "position": [
+        5200,
+        1400
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 15000
+        }
+      },
+      "name": "Search Sources",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "onError": "continueRegularOutput",
+      "id": "ab144826-038c-4b18-80e1-849f089fb46f",
+      "position": [
+        5460,
+        1400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const cfg = $('Config').first().json.cfg.research;\nconst req = $('Build Source Search').first().json;\nconst STOP = new Set(['the','a','an','of','in','on','at','to','for','with','and','or','its','as','by','from','after','over','into','new','says','said']);\nconst tokens = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\\s+/).filter(w => w.length > 2 && !STOP.has(w));\nconst topicTokens = new Set(tokens(req.topicTitle));\nconst outletsNamed = String(req.sourcesLine || '').toLowerCase();\nconst primaryTokens = tokens(req.primary).filter(t => t !== 'unknown');\n\nconst decode = (s) => String(s || '').replace(/<!\\[CDATA\\[([\\s\\S]*?)\\]\\]>/g, '$1')\n  .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '\"').replace(/&#39;|&apos;/g, \"'\").replace(/&amp;/g, '&').trim();\nconst BLOCKED = /(^|\\.)(bing\\.com|news\\.google\\.com|google\\.com|msn\\.com|youtube\\.com|facebook\\.com|x\\.com|twitter\\.com|linkedin\\.com|instagram\\.com|tiktok\\.com|reddit\\.com|wikipedia\\.org)$/i;\n\nconst candidates = [];\nconst searches = $('Build Source Search').all();\n$input.all().forEach((item, i) => {\n  const kind = (searches[i] && searches[i].json.kind) || 'news';\n  const xml = String(item.json.data || '');\n  const re = /<item>([\\s\\S]*?)<\\/item>/g;\n  let m;\n  while ((m = re.exec(xml)) !== null) {\n    const block = m[1];\n    const get = (tag) => { const r = block.match(new RegExp('<' + tag + '[^>]*>([\\\\s\\\\S]*?)</' + tag + '>', 'i')); return r ? decode(r[1]) : ''; };\n    let url = get('link');\n    // Bing wraps news links as .../apiclick.aspx?...&url=<encoded publisher URL>&...\n    const wrapped = url.match(/[?&]url=([^&]+)/i);\n    if (wrapped) { try { url = decodeURIComponent(wrapped[1]); } catch (e) {} }\n    if (!/^https?:\\/\\//i.test(url)) continue;\n    let host = '';\n    try { host = new URL(url).hostname.replace(/^www\\./, ''); } catch (e) { continue; }\n    if (BLOCKED.test(host)) continue;\n    const title = get('title');\n    const outlet = get('News:Source') || get('source') || host;\n    const overlap = topicTokens.size ? tokens(title).filter(t => topicTokens.has(t)).length / topicTokens.size : 0;\n    const isPrimary = cfg.primaryDomains.some(d => host === d || host.endsWith('.' + d))\n      || (primaryTokens.length > 0 && primaryTokens.some(t => host.split('.').slice(0, -1).join('.').includes(t)));\n    // Relevance first: an off-topic page is worse than one source fewer.\n    if (overlap < 0.3 && !isPrimary) continue;\n    const named = outletsNamed && (outletsNamed.includes(outlet.toLowerCase()) || outletsNamed.includes(host.split('.')[0]));\n    const score = overlap * 4 + (isPrimary ? 5 : 0) + (named ? 2 : 0) + (kind === 'news' ? 0.5 : 0);\n    candidates.push({ url, host, title, outlet, published: get('pubDate'), isPrimary, score: Math.round(score * 100) / 100 });\n  }\n});\n\n// One page per site, best first.\ncandidates.sort((a, b) => b.score - a.score);\nconst seen = new Set();\nconst picked = [];\nfor (const c of candidates) {\n  if (seen.has(c.host)) continue;\n  seen.add(c.host);\n  picked.push(c);\n  if (picked.length >= cfg.maxSources) break;\n}\n\nconst base = { chatId: req.chatId, isScheduled: req.isScheduled, topicTitle: req.topicTitle, candidateCount: candidates.length };\n// Always emit at least one item so the chain reaches Parse Dossier, which reports \"no sources\".\nif (!picked.length) return [{ json: { ...base, url: '', skip: true } }];\nreturn picked.map((p, i) => ({ json: { ...base, ...p, sourceId: 'S' + (i + 1) } }));\n"
+      },
+      "name": "Pick Source URLs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "id": "5417927f-e511-4639-b47b-4938e13730b6",
+      "position": [
+        5720,
+        1400
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ !$json.url ? '' : ($('Config').first().json.cfg.research.reader === 'jina' ? 'https://r.jina.ai/' + $json.url : $json.url) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Retain-Images",
+              "value": "none"
+            },
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (compatible; PromoMagResearch/1.0)"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "name": "Fetch Article Text",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput",
+      "id": "8ccac282-ffab-4bc8-a16c-61e657be1c48",
+      "position": [
+        5980,
+        1400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const cfg = $('Config').first().json.cfg;\nconst picks = $('Pick Source URLs').all().map(i => i.json);\nconst first = picks[0] || {};\n\n// Reader output is markdown (jina) or raw HTML (direct). Reduce both to article prose.\nconst fromHtml = (h) => String(h)\n  .replace(/<(script|style|noscript|nav|footer|header|aside|form)[\\s\\S]*?<\\/\\1>/gi, ' ')\n  .replace(/<\\/(p|h[1-6]|li|div|br)>/gi, '\\n').replace(/<[^>]+>/g, ' ')\n  .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&quot;/g, '\"').replace(/&#39;|&rsquo;|&lsquo;/g, \"'\")\n  .replace(/&ldquo;|&rdquo;/g, '\"').replace(/&pound;/g, '£').replace(/&euro;/g, '€');\nconst tidy = (t) => t\n  .replace(/!\\[[^\\]]*\\]\\([^)]*\\)/g, ' ')            // images\n  .replace(/\\[([^\\]]+)\\]\\((?:[^)(]|\\([^)]*\\))*\\)/g, '$1') // links -> link text\n  .split('\\n').map(l => l.replace(/^[#>*\\-\\s]+/, '').trim())\n  // Menus, share buttons and bylines are short lines with no sentence in them.\n  .filter(l => l.length >= 40 || /[.!?:][\"')]?$/.test(l) && l.length >= 15)\n  .join('\\n').replace(/\\n{2,}/g, '\\n').trim();\nconst BLOCKED_PAGE = /(access denied|just a moment|enable javascript|are you a robot|captcha|subscribe to (?:continue|read)|402 payment required)/i;\n\nconst sources = [];\nlet total = 0;\nconst notes = [];\n$input.all().forEach((item, i) => {\n  const p = picks[i] || {};\n  if (!p.url) return;\n  const raw = String(item.json.data || '');\n  if (item.json.error || !raw) { notes.push(p.host + ': fetch failed'); return; }\n  let text = /<html|<body|<div/i.test(raw.slice(0, 2000)) ? fromHtml(raw) : raw;\n  const pub = (text.match(/^Published Time:\\s*(.+)$/m) || [])[1] || p.published || '';\n  text = text.replace(/^(Title|URL Source|Published Time|Markdown Content):.*$/gm, '');\n  text = tidy(text);\n  if (text.length < 400 || BLOCKED_PAGE.test(text.slice(0, 600))) { notes.push(p.host + ': no readable article text'); return; }\n  const room = cfg.research.maxTotalChars - total;\n  if (room < 800) { notes.push(p.host + ': skipped, text budget used'); return; }\n  text = text.slice(0, Math.min(cfg.research.maxCharsPerSource, room));\n  total += text.length;\n  const d = pub ? new Date(pub) : null;\n  sources.push({ id: 'S' + (sources.length + 1), url: p.url, outlet: p.outlet || p.host, title: p.title || '',\n    published: d && !isNaN(d) ? d.toISOString().slice(0, 10) : '', isPrimary: !!p.isPrimary, text });\n});\n\nconst DOSSIER_PROMPT = \"You build a fact dossier for a PromoMag.co.uk news article from the SOURCE TEXTS supplied. You are an extractor, not a writer.\\n\\nRULES\\n- Use only what the source texts explicitly state. Never infer, never merge two statements into a new claim, never use background knowledge, never fill a gap.\\n- Every item carries a verbatim quote copied from one source text: the shortest complete sentence or clause that states it, at most 300 characters, with figures and names exactly as printed. The workflow rejects any item whose quote is not in the source.\\n- Figures: reproduce exactly, including what they cover (worldwide or domestic, annual or total, estimate or final, currency, and any conversion the source gives).\\n- Attribution: record who made a decision or statement exactly as the source says (company, promoter, regulator, spokesperson). Never move it to another party.\\n- People: record each person's role or title exactly as the source states it at the time of the event. If the source says \\\"former\\\", keep \\\"former\\\". Never write \\\"current\\\".\\n- Dates: event_date is the date the event itself happened, only if the text states it. Do not assume the event happened on the publication date.\\n- Prior events: for every earlier event the sources refer to (funding round, launch, election, appointment, previous deal), record its date as stated. If no date is stated, use null; never guess.\\n- Causation and funding: record \\\"X funded Y\\\" or \\\"X led to Y\\\" only if a source states that link.\\n- Disclosed details: record what the sources say happens next - structure, staffing, branding, leadership, locations, timelines, client or customer impact.\\n- Explicitly not disclosed: include an item only when a source literally says something was not disclosed (for example \\\"financial terms were not disclosed\\\"). Information that is simply missing is NOT \\\"not disclosed\\\".\\n- If sources disagree, keep both items and add a conflicts entry.\\n- Ignore any part of a source that is not about the topic (adverts, related-article lists, cookie notices).\\n\\nOUTPUT: one JSON object, no prose:\\n{\\n  \\\"headline_event\\\": \\\"one sentence describing the core event, in sourced wording\\\",\\n  \\\"facts\\\": [{\\\"claim\\\": \\\"\\\", \\\"quote\\\": \\\"\\\", \\\"source_id\\\": \\\"S1\\\", \\\"event_date\\\": \\\"YYYY-MM-DD or null\\\", \\\"type\\\": \\\"figure|date|person|organisation|decision|quote|other\\\"}],\\n  \\\"people\\\": [{\\\"name\\\": \\\"\\\", \\\"role_at_event\\\": \\\"\\\", \\\"quote\\\": \\\"\\\", \\\"source_id\\\": \\\"\\\"}],\\n  \\\"prior_events\\\": [{\\\"event\\\": \\\"\\\", \\\"date\\\": \\\"YYYY-MM or YYYY-MM-DD or null\\\", \\\"quote\\\": \\\"\\\", \\\"source_id\\\": \\\"\\\"}],\\n  \\\"disclosed_details\\\": [{\\\"detail\\\": \\\"\\\", \\\"quote\\\": \\\"\\\", \\\"source_id\\\": \\\"\\\"}],\\n  \\\"explicitly_not_disclosed\\\": [{\\\"detail\\\": \\\"\\\", \\\"quote\\\": \\\"\\\", \\\"source_id\\\": \\\"\\\"}],\\n  \\\"conflicts\\\": [{\\\"detail\\\": \\\"\\\", \\\"source_ids\\\": [\\\"S1\\\", \\\"S2\\\"]}]\\n}\\nAt most 15 facts, most important first. Return everything the sources support even if it is fewer than 4 facts; the workflow decides whether that is enough.\";\nconst sourceBlock = sources.map(s => '=== ' + s.id + ' | ' + s.outlet + ' | ' + s.url + ' | published: ' + (s.published || 'unknown') + ' ===\\n' + s.text).join('\\n\\n');\n\nreturn [{ json: {\n  chatId: first.chatId, isScheduled: !!first.isScheduled, topicTitle: first.topicTitle,\n  sources, sourceChars: total, fetchNotes: notes, haveSources: sources.length > 0,\n  request: {\n    model: cfg.models.dossier, temperature: 0, max_tokens: 2500, response_format: { type: 'json_object' },\n    messages: [\n      { role: 'system', content: DOSSIER_PROMPT },\n      { role: 'user', content: 'TOPIC: ' + first.topicTitle + '\\n\\nSOURCE TEXTS:\\n\\n' + sourceBlock }\n    ]\n  }\n}}];\n"
+      },
+      "name": "Build Source Pack",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "executeOnce": false,
+      "id": "0b88add6-e6aa-4279-864c-556aaebffc86",
+      "position": [
+        6240,
+        1400
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "5618b1a0-1cff-4316-af40-1b08e62d4a65",
+              "leftValue": "={{ $json.haveSources }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Have Sources?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "id": "c7f7a8f0-9adf-4354-bbc0-408972f614cd",
+      "position": [
+        6500,
+        1400
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.request) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "name": "Extract Dossier",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "credentials": {
+        "openAiApi": {
+          "id": "hi9jgbWx4TTKkRVO",
+          "name": "OpenAi account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput",
+      "id": "6e4c8d7e-ddcf-494e-98fe-e0cb3cef820d",
+      "position": [
+        6760,
+        1300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normalise for quote matching: case, whitespace, curly quotes and dashes vary between the\n// reader output and what a model copies back.\nconst norm = (s) => String(s || '').toLowerCase()\n  .replace(/[‘’‚′]/g, \"'\").replace(/[“”„″]/g, '\"')\n  .replace(/[‐-―−]/g, '-').replace(/ /g, ' ')\n  .replace(/[*_`]/g, '').replace(/\\s+/g, ' ').trim();\n// A quote counts as found if it appears verbatim (after normalising), or if one source sentence\n// contains at least 90% of its words - this tolerates a dropped comma, not a changed figure.\nconst words = (s) => norm(s).replace(/[^a-z0-9%$£€.\\- ]/g, ' ').split(/\\s+/)\n  .map(w => w.replace(/^[.\\-]+|[.\\-]+$/g, '')).filter(w => w.length > 1);\nconst quoteFound = (quote, text) => {\n  const q = norm(quote);\n  if (q.length < 12) return false;\n  const t = norm(text);\n  if (t.includes(q)) return true;\n  const qw = words(quote);\n  if (qw.length < 4) return false;\n  const nums = qw.filter(w => /\\d/.test(w));\n  for (const sent of t.split(/(?<=[.!?])\\s+|\\n+/)) {\n    const sw = new Set(words(sent));\n    const hit = qw.filter(w => sw.has(w)).length / qw.length;\n    // Every figure in the quote must be in the sentence: 90% overlap must not pass a changed number.\n    if (hit >= 0.9 && nums.every(n => sw.has(n))) return true;\n  }\n  return false;\n};\n\nconst cfg = $('Config').first().json.cfg;\nconst pack = $('Build Source Pack').first().json;\nconst sources = pack.sources || [];\nconst byId = Object.fromEntries(sources.map(s => [s.id, s]));\nconst chatId = pack.chatId;\nconst isScheduled = pack.isScheduled;\n\nlet d = {};\nlet llmError = '';\ntry {\n  const content = $json.choices && $json.choices[0] && $json.choices[0].message.content;\n  if (content) d = JSON.parse(content);\n  else if ($json.error) llmError = String($json.error.message || $json.error).slice(0, 200);\n} catch (e) { llmError = 'dossier JSON did not parse'; }\n\n// Keep only items whose quote is really in the cited source. This is what stops invented facts,\n// misread figures and made-up URLs: the URL comes from the fetch, never from the model.\nconst rejected = [];\nconst ground = (arr, label) => (Array.isArray(arr) ? arr : []).filter(x => {\n  const s = byId[x.source_id];\n  const ok = !!s && quoteFound(x.quote, s.text);\n  if (!ok) rejected.push(label + ': ' + String(x.claim || x.detail || x.event || x.name || '').slice(0, 80));\n  return ok;\n}).map(x => ({ ...x, url: byId[x.source_id].url, outlet: byId[x.source_id].outlet, published: byId[x.source_id].published }));\n\nconst facts = ground(d.facts, 'fact');\nconst people = ground(d.people, 'person');\nconst prior = ground(d.prior_events, 'prior event');\nconst disclosed = ground(d.disclosed_details, 'detail');\nconst notDisclosed = ground(d.explicitly_not_disclosed, 'not disclosed');\nconst conflicts = Array.isArray(d.conflicts) ? d.conflicts : [];\n\nconst sufficient = facts.length >= cfg.research.minFacts;\nconst usedIds = new Set([...facts, ...people, ...prior, ...disclosed, ...notDisclosed].map(x => x.source_id));\nconst usedSources = sources.filter(s => usedIds.has(s.id));\n\n// Plain-text dossier for the writer. No bracketed IDs: the writer copies whatever format it sees.\nconst L = [];\nL.push('TOPIC: ' + pack.topicTitle);\nif (d.headline_event) L.push('CORE EVENT: ' + d.headline_event);\nL.push('', 'SOURCES');\nusedSources.forEach(s => L.push('- ' + s.outlet + (s.isPrimary ? ' (primary source)' : '') + ', published ' + (s.published || 'date unknown')));\nL.push('', 'FACTS (each confirmed verbatim in a source; the quote is the exact source wording)');\nfacts.forEach((f, i) => L.push((i + 1) + '. ' + f.claim + '\\n   Source: ' + f.outlet + (f.event_date ? ' | event date: ' + f.event_date : '') + '\\n   Quote: \"' + f.quote + '\"'));\nif (people.length) { L.push('', 'PEOPLE (role as stated at the time of the event)'); people.forEach(p => L.push('- ' + p.name + ': ' + p.role_at_event + ' (' + p.outlet + ')')); }\nif (prior.length) { L.push('', 'EARLIER EVENTS (with the date the source gives)'); prior.forEach(p => L.push('- ' + p.event + ': ' + (p.date || 'date not stated') + ' (' + p.outlet + ')')); }\nif (disclosed.length) { L.push('', 'DISCLOSED DETAILS (what the sources say happens next)'); disclosed.forEach(x => L.push('- ' + x.detail + ' (' + x.outlet + ')')); }\nL.push('', 'EXPLICITLY NOT DISCLOSED (only items a source says were withheld)');\nif (notDisclosed.length) notDisclosed.forEach(x => L.push('- ' + x.detail + ' (' + x.outlet + ': \"' + x.quote + '\")'));\nelse L.push('- none');\nif (conflicts.length) { L.push('', 'CONFLICTS BETWEEN SOURCES'); conflicts.forEach(c => L.push('- ' + c.detail)); }\nconst dossierText = L.join('\\n');\n\nconst dossier = {\n  topicTitle: pack.topicTitle, text: dossierText, facts, people, prior, disclosed, notDisclosed,\n  sources: usedSources.map(s => ({ id: s.id, url: s.url, outlet: s.outlet, published: s.published, text: s.text })),\n  rejected, sufficient\n};\n\nif (!isScheduled) {\n  const sd = $getWorkflowStaticData('global');\n  if (sufficient) sd['dossier_' + chatId] = dossier;\n  else delete sd['dossier_' + chatId];\n}\n\nconst reason = !sources.length ? 'no source article could be found and read' + (pack.fetchNotes && pack.fetchNotes.length ? ' (' + pack.fetchNotes.join('; ') + ')' : '')\n  : llmError ? 'dossier extraction failed: ' + llmError\n  : 'only ' + facts.length + ' fact(s) could be confirmed in the source text (minimum ' + cfg.research.minFacts + ')';\n\nreturn [{ json: {\n  chatId, isScheduled, sufficient,\n  route: (isScheduled ? 'sched_' : 'chat_') + (sufficient ? 'ok' : 'fail'),\n  reason: sufficient ? '' : reason,\n  dossier,\n  stats: { sources: sources.length, sourceChars: pack.sourceChars, facts: facts.length, rejected: rejected.length }\n}}];\n"
+      },
+      "name": "Parse Dossier",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "id": "a356a2e1-6cbb-4eed-aaba-1905f9ace8cb",
+      "position": [
+        7020,
+        1400
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "0e733c59-0984-4943-80c3-0b7f1da5cc69",
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "chat_ok",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Chat: verified"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "2a758ab7-bda2-43f2-b10f-b9aa62b7eeb4",
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "chat_fail",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Chat: not enough facts"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "5d0f0fe0-a827-4c35-9d71-6f8c15bcec03",
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "sched_ok",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Scheduled: verified"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "fd42aba9-6b08-4e5d-9c44-a8e937727f8e",
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "sched_fail",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Scheduled: not enough facts"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Route Dossier",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "id": "91ed7c1a-da6f-411f-bf8c-5685dac9057f",
+      "position": [
+        7280,
+        1400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const d = $json.dossier;\nreturn [{ json: { chatId: $json.chatId, promptText: 'Topic: ' + d.topicTitle + '\\n\\n[VERIFIED DOSSIER]\\n' + d.text } }];\n"
+      },
+      "name": "Build ToC From Dossier",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "id": "8b667538-37aa-4119-87b2-4a2607c9fd82",
+      "position": [
+        7540,
+        1200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const mdSafe = (s) => String(s || '').replace(/[_*\\[\\]`]/g, ' ').replace(/\\s+/g, ' ').trim();\nconst s = $getWorkflowStaticData('global')['session_' + $json.chatId] || {};\nreturn [{ json: { chatId: $json.chatId, text: '⚠️ *Could not verify this story*\\n\\n' + mdSafe(s.topicTitle) + '\\n\\n' + mdSafe($json.reason) +\n  '. Nothing was written.\\n\\nReply with another topic number, or send the category again for fresh topics.' } }];\n"
+      },
+      "name": "Format Dossier Failure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "id": "e69e73b3-ae60-41ad-9ce7-8154d39793b0",
+      "position": [
+        7540,
+        1400
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "Markdown"
+        }
+      },
+      "name": "Send Dossier Failure",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "credentials": {
+        "telegramApi": {
+          "id": "F7kV4EHRCT4GkYho",
+          "name": "Telegram account"
+        }
+      },
+      "id": "17ce8202-a722-4619-928c-b49001a6ee84",
+      "position": [
+        7800,
+        1400
+      ],
+      "webhookId": "e0781f6f-508c-4e72-96e8-a8307b6046ba"
+    },
+    {
+      "parameters": {
+        "jsCode": "const cfg = $('Scheduled Config').first().json;\nconst d = $json.dossier;\nconst date = $getWorkflowStaticData('global')['researchDate_' + cfg.chatId] || new Date().toDateString();\nconst promptText =\n  '[CURRENT DATE: ' + date + ']\\n\\n' +\n  'Write the complete article now. Do not ask questions, do not acknowledge. Return the finished article starting with [BLOCK:METADATA].\\n\\n' +\n  'Category: ' + cfg.categoryLabel + '\\n' +\n  'Topic: ' + d.topicTitle + '\\n\\n' +\n  '[VERIFIED DOSSIER - your only source of fact]\\n\\n' + d.text;\nreturn [{ json: { promptText, chatId: cfg.chatId, topicTitle: d.topicTitle } }];\n"
+      },
+      "name": "Build Scheduled Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "id": "94fcb131-ed4d-4c61-a9d8-bf67b46b749d",
+      "position": [
+        7540,
+        1600
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const mdSafe = (s) => String(s || '').replace(/[_*\\[\\]`]/g, ' ').replace(/\\s+/g, ' ').trim();\nconst cfg = $('Scheduled Config').first().json;\nreturn [{ json: { chatId: cfg.chatId, text: '⏭️ *Scheduled run skipped - ' + cfg.categoryLabel + '*\\n\\n' + mdSafe($json.dossier && $json.dossier.topicTitle) +\n  '\\n\\n' + mdSafe($json.reason) + '. Nothing was written or published.' } }];\n"
+      },
+      "name": "Format Scheduled Skip",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "id": "272c764a-d410-4c84-b716-23d88c6b357f",
+      "position": [
+        7540,
+        1800
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "Markdown"
+        }
+      },
+      "name": "Send Scheduled Skip",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "credentials": {
+        "telegramApi": {
+          "id": "F7kV4EHRCT4GkYho",
+          "name": "Telegram account"
+        }
+      },
+      "id": "02719ad7-f562-45fe-aa61-73049316bf98",
+      "position": [
+        7800,
+        1800
+      ],
+      "webhookId": "9539720f-4633-4eea-afca-3a066223a28c"
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o",
+        "options": {
+          "maxTokens": 4000,
+          "temperature": 0.3,
+          "maxRetries": 4,
+          "timeout": 120000
+        }
+      },
+      "name": "Writer LLM",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.1,
+      "credentials": {
+        "openAiApi": {
+          "id": "hi9jgbWx4TTKkRVO",
+          "name": "OpenAi account"
+        }
+      },
+      "id": "50577eab-8daa-4b9f-acbe-844b79054aa4",
+      "position": [
+        4940,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Splits the writer's draft into blocks and builds the fact-check request against the fetched\n// source texts. Shared by both paths: the scheduled run has the dossier in run data, the Telegram\n// run (a later execution than the topic pick) reads it from static data.\nconst chatId = (()=>{try{return $('Telegram Trigger').first().json.message.chat.id}catch(e){}try{return $('Scheduled Config').first().json.chatId}catch(e){}return $getWorkflowStaticData('global')['currentChatId']})();\nconst isScheduled = (()=>{try{return $('Scheduled Config').isExecuted===true}catch(e){return false}})();\nlet dossier = null;\ntry { if ($('Parse Dossier').isExecuted) dossier = $('Parse Dossier').first().json.dossier; } catch (e) {}\nif (!dossier) dossier = $getWorkflowStaticData('global')['dossier_' + chatId] || null;\nconst cfg = $('Config').first().json.cfg;\n\nconst output = String($json.output || '');\n\nconst block = (tag) => {\n  const open = '[BLOCK:' + tag + ']';\n  const s = output.indexOf(open);\n  if (s === -1) return '';\n  const cs = s + open.length;\n  const ends = [output.indexOf('[/BLOCK]', cs), output.indexOf('[BLOCK:', cs)].filter(i => i !== -1);\n  return output.slice(cs, ends.length ? Math.min(...ends) : output.length).trim();\n};\nconst meta = block('METADATA');\nconst body = block('ARTICLE');\nconst sources = (dossier && dossier.sources) || [];\nconst FACT_CHECK_PROMPT = \"You are the fact-checker for PromoMag.co.uk. You receive an ARTICLE and the SOURCE TEXTS it must be based on. Check the article against the source texts only \\u2014 never against your own knowledge.\\n\\nExtract every checkable claim in the article: names, roles and titles, organisations, figures and what they cover, dates, sequence and timing words (after, following, on the heels of, weeks later, recently), causation or funding links, who made a decision or statement, and any statement that something is undisclosed, unknown or unclear. Split compound sentences into separate claims. Skip pure opinion, but check any fact implied inside it.\\n\\nFor each claim return:\\n- \\\"claim\\\": the claim as the article states it (short)\\n- \\\"supported\\\": \\\"true\\\" when a source states it with the same meaning, scope and attribution; \\\"partial\\\" when a source supports part of it but the article changes a figure's coverage, the timing, the attribution, a role's tense, or adds causation; \\\"false\\\" when no source states it or a source contradicts it\\n- \\\"evidence_quote\\\": the exact sentence from a source that supports or contradicts it, copied verbatim (\\\"\\\" if none)\\n- \\\"source_url\\\": the URL of that source (\\\"\\\" if none)\\n- \\\"fix\\\": for partial or false, the corrected wording the sources support, or \\\"remove\\\"\\n\\nStrict rules:\\n- Saying something is undisclosed, unknown or unclear is \\\"false\\\" unless a source literally says it was not disclosed.\\n- Timing or sequence words are \\\"partial\\\" unless the sources give both dates and they support the wording.\\n- A role described as current is \\\"partial\\\" if the source gives it only as of an earlier date.\\n- Figures must match exactly, including currency and what they cover.\\n\\nOutput one JSON object: {\\\"claims\\\": [ ... ], \\\"summary\\\": \\\"one sentence\\\"}\";\nconst field = (f) => { for (const l of meta.split('\\n')) if (l.trim().startsWith(f + ':')) return l.trim().slice(f.length + 1).trim(); return ''; };\nconst articleForCheck = 'TITLE: ' + field('Title') + '\\nMETA: ' + field('Meta') + '\\n\\n' + body;\n\nreturn [{ json: {\n  chatId, isScheduled, output, hasDraft: !!(meta && body), body,\n  sources, dossierText: dossier ? dossier.text : '', notDisclosed: dossier ? (dossier.notDisclosed || []) : [],\n  request: {\n    model: cfg.models.factCheck, temperature: 0, max_tokens: 3000, response_format: { type: 'json_object' },\n    messages: [\n      { role: 'system', content: FACT_CHECK_PROMPT },\n      { role: 'user', content: 'ARTICLE:\\n' + articleForCheck + '\\n\\nSOURCE TEXTS:\\n\\n' +\n        sources.map(s => '=== ' + s.url + ' | ' + s.outlet + ' | published ' + (s.published || 'unknown') + ' ===\\n' + s.text).join('\\n\\n') }\n    ]\n  }\n}}];\n"
+      },
+      "name": "Extract Draft",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "id": "c328853d-3125-4db9-89c3-af536867c789",
+      "position": [
+        5200,
+        1700
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.request) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "name": "Fact Check",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "credentials": {
+        "openAiApi": {
+          "id": "hi9jgbWx4TTKkRVO",
+          "name": "OpenAi account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput",
+      "id": "e8d16c08-1932-4a7c-8dc8-bc3967fdd4c4",
+      "position": [
+        5460,
+        1700
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normalise for quote matching: case, whitespace, curly quotes and dashes vary between the\n// reader output and what a model copies back.\nconst norm = (s) => String(s || '').toLowerCase()\n  .replace(/[‘’‚′]/g, \"'\").replace(/[“”„″]/g, '\"')\n  .replace(/[‐-―−]/g, '-').replace(/ /g, ' ')\n  .replace(/[*_`]/g, '').replace(/\\s+/g, ' ').trim();\n// A quote counts as found if it appears verbatim (after normalising), or if one source sentence\n// contains at least 90% of its words - this tolerates a dropped comma, not a changed figure.\nconst words = (s) => norm(s).replace(/[^a-z0-9%$£€.\\- ]/g, ' ').split(/\\s+/)\n  .map(w => w.replace(/^[.\\-]+|[.\\-]+$/g, '')).filter(w => w.length > 1);\nconst quoteFound = (quote, text) => {\n  const q = norm(quote);\n  if (q.length < 12) return false;\n  const t = norm(text);\n  if (t.includes(q)) return true;\n  const qw = words(quote);\n  if (qw.length < 4) return false;\n  const nums = qw.filter(w => /\\d/.test(w));\n  for (const sent of t.split(/(?<=[.!?])\\s+|\\n+/)) {\n    const sw = new Set(words(sent));\n    const hit = qw.filter(w => sw.has(w)).length / qw.length;\n    // Every figure in the quote must be in the sentence: 90% overlap must not pass a changed number.\n    if (hit >= 0.9 && nums.every(n => sw.has(n))) return true;\n  }\n  return false;\n};\n\n// Deterministic checks that do not depend on the model's honesty.\nconst GATES = [\n  { re: /\\[[A-Z][^\\]]+,\\s+\\w+\\s+\\d{4}\\]/, why: 'bracket citation tag such as [Outlet, Month Year]' },\n  { re: /[\\[(](?:F|S)\\d{1,2}[\\])]/, why: 'internal dossier reference such as [S1] in the text' },\n  { re: /https?:\\/\\//i, why: 'raw URL in the article body (source links are appended by the workflow)' }\n];\nconst UNDISCLOSED = /\\b(undisclosed|not (?:been |yet )?disclosed|yet to (?:be )?(?:disclose|reveal|announce)|remains? (?:unclear|unknown|to be seen)|it is (?:not )?(?:unclear|unknown))\\b/i;\n\n// Pass 1 of the fact check. The model's verdicts are not taken on trust: a \"supported\"\n// claim whose evidence quote is not in a source is downgraded to partial.\nconst draft = $('Extract Draft').first().json;\nconst cfg = $('Config').first().json.cfg;\nconst sources = draft.sources || [];\nconst allText = sources.map(s => s.text).join('\\n');\n\nlet claims = [];\nlet checkAvailable = false;\ntry {\n  const content = $json.choices && $json.choices[0] && $json.choices[0].message.content;\n  if (content) { claims = JSON.parse(content).claims || []; checkAvailable = true; }\n} catch (e) { checkAvailable = false; }\n\nclaims = claims.map(c => {\n  let verdict = String(c.supported).toLowerCase();\n  if (verdict !== 'true' && verdict !== 'partial') verdict = 'false';\n  let note = '';\n  if (verdict === 'true' && !quoteFound(c.evidence_quote, allText)) { verdict = 'partial'; note = 'evidence quote not found in the sources'; }\n  return { claim: String(c.claim || ''), verdict, evidence: String(c.evidence_quote || ''), url: String(c.source_url || ''), fix: String(c.fix || ''), note };\n});\n\nconst problems = claims.filter(c => c.verdict !== 'true');\nconst gateIssues = [];\nif (!draft.hasDraft) gateIssues.push('draft is missing the [BLOCK:METADATA] or [BLOCK:ARTICLE] block');\nif (!sources.length) gateIssues.push('no source texts to check against');\nif (!checkAvailable) gateIssues.push('fact check unavailable (OpenAI error or unparsable reply)');\nfor (const g of GATES) if (g.re.test(draft.body)) gateIssues.push(g.why);\n// Each \"undisclosed/unclear\" sentence must be about something a source said was withheld. One\n// genuinely undisclosed price must not license \"operational changes remain undisclosed\".\nconst GENERIC = new Set(['disclosed','undisclosed','disclose','details','detail','terms','were','been','with','that','this','from','have','which','about']);\nconst withheld = (draft.notDisclosed || []).map(x => words((x.detail || '') + ' ' + (x.quote || '')).filter(w => w.length > 3 && !GENERIC.has(w)));\nfor (const sent of String(draft.body).split(/(?<=[.!?])\\s+|\\n+/)) {\n  if (!UNDISCLOSED.test(sent)) continue;\n  const sw = new Set(words(sent));\n  if (!withheld.some(ws => ws.some(w => sw.has(w)))) {\n    gateIssues.push('says something is undisclosed/unclear that no source says was withheld: \"' + sent.trim().slice(0, 100) + '\"');\n  }\n}\n\nconst counts = {\n  total: claims.length,\n  supported: claims.filter(c => c.verdict === 'true').length,\n  partial: claims.filter(c => c.verdict === 'partial').length,\n  unsupported: claims.filter(c => c.verdict === 'false').length\n};\nconst clean = checkAvailable && draft.hasDraft && sources.length > 0 && problems.length === 0 && gateIssues.length === 0;\n\nconst REVISE_PROMPT = \"You correct a PromoMag.co.uk article after a fact check. You receive the ARTICLE (in [BLOCK:] format), the PROBLEMS found, and the VERIFIED DOSSIER.\\n\\nFor each problem: remove the claim, or replace it with the corrected wording given in the problem's fix or supported by the dossier. Remove every bracket citation tag, dossier reference and URL from the text. Do not add any new fact. Do not change sentences that have no problem, except to keep the prose grammatical after a removal. If a paragraph loses its only fact, delete the paragraph.\\n\\nReturn the complete corrected article in exactly the same [BLOCK:METADATA], [BLOCK:ARTICLE] and [BLOCK:SEO] format, including every closing [/BLOCK] tag, and nothing else. Correct the METADATA Title and Meta too if they repeat a problem.\";\nconst problemList = [\n  ...problems.map(p => '- ' + (p.verdict === 'false' ? 'UNSUPPORTED' : 'PARTIAL') + ': \"' + p.claim + '\"' + (p.fix ? ' -> fix: ' + p.fix : '') + (p.note ? ' (' + p.note + ')' : '')),\n  ...gateIssues.map(g => '- FORMAT: ' + g)\n].join('\\n');\n\nreturn [{ json: {\n  pass: 1, clean, checkAvailable, counts, problems, gateIssues,\n  chatId: draft.chatId, isScheduled: draft.isScheduled, output: draft.output, body: draft.body,\n  sources, dossierText: draft.dossierText, notDisclosed: draft.notDisclosed,\n  request: {\n    model: cfg.models.revise, temperature: 0.2, max_tokens: 4000,\n    messages: [\n      { role: 'system', content: REVISE_PROMPT },\n      { role: 'user', content: 'ARTICLE:\\n' + draft.output + '\\n\\nPROBLEMS:\\n' + problemList + '\\n\\nVERIFIED DOSSIER:\\n' + draft.dossierText }\n    ]\n  }\n}}];\n"
+      },
+      "name": "Assess Fact Check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "id": "392d9d17-4d65-45a2-97e2-ce7f831d16b6",
+      "position": [
+        5720,
+        1700
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "29e0d73e-1a3c-4ac8-bc7d-93472af9a093",
+              "leftValue": "={{ !$json.clean && $json.checkAvailable && $json.sources.length > 0 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Needs Revision?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "id": "216f6bbf-2716-46f1-98bb-c99ce3a8d72b",
+      "position": [
+        5980,
+        1700
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.request) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "name": "Revise Draft",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "credentials": {
+        "openAiApi": {
+          "id": "hi9jgbWx4TTKkRVO",
+          "name": "OpenAi account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput",
+      "id": "a4c0e6d3-a7c7-4136-bdd1-0baab38d6f7b",
+      "position": [
+        6240,
+        1600
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Splits the writer's draft into blocks and builds the fact-check request against the fetched\n// source texts. Shared by both paths: the scheduled run has the dossier in run data, the Telegram\n// run (a later execution than the topic pick) reads it from static data.\nconst chatId = (()=>{try{return $('Telegram Trigger').first().json.message.chat.id}catch(e){}try{return $('Scheduled Config').first().json.chatId}catch(e){}return $getWorkflowStaticData('global')['currentChatId']})();\nconst isScheduled = (()=>{try{return $('Scheduled Config').isExecuted===true}catch(e){return false}})();\nlet dossier = null;\ntry { if ($('Parse Dossier').isExecuted) dossier = $('Parse Dossier').first().json.dossier; } catch (e) {}\nif (!dossier) dossier = $getWorkflowStaticData('global')['dossier_' + chatId] || null;\nconst cfg = $('Config').first().json.cfg;\n\n// Use the revision if it came back with blocks; otherwise re-check the original draft so the\n// second pass still reports honestly.\nconst revised = $json.choices && $json.choices[0] && $json.choices[0].message.content;\nconst original = $('Assess Fact Check').first().json.output;\nconst output = String(revised && revised.includes('[BLOCK:ARTICLE]') ? revised : original);\n\nconst block = (tag) => {\n  const open = '[BLOCK:' + tag + ']';\n  const s = output.indexOf(open);\n  if (s === -1) return '';\n  const cs = s + open.length;\n  const ends = [output.indexOf('[/BLOCK]', cs), output.indexOf('[BLOCK:', cs)].filter(i => i !== -1);\n  return output.slice(cs, ends.length ? Math.min(...ends) : output.length).trim();\n};\nconst meta = block('METADATA');\nconst body = block('ARTICLE');\nconst sources = (dossier && dossier.sources) || [];\nconst FACT_CHECK_PROMPT = \"You are the fact-checker for PromoMag.co.uk. You receive an ARTICLE and the SOURCE TEXTS it must be based on. Check the article against the source texts only \\u2014 never against your own knowledge.\\n\\nExtract every checkable claim in the article: names, roles and titles, organisations, figures and what they cover, dates, sequence and timing words (after, following, on the heels of, weeks later, recently), causation or funding links, who made a decision or statement, and any statement that something is undisclosed, unknown or unclear. Split compound sentences into separate claims. Skip pure opinion, but check any fact implied inside it.\\n\\nFor each claim return:\\n- \\\"claim\\\": the claim as the article states it (short)\\n- \\\"supported\\\": \\\"true\\\" when a source states it with the same meaning, scope and attribution; \\\"partial\\\" when a source supports part of it but the article changes a figure's coverage, the timing, the attribution, a role's tense, or adds causation; \\\"false\\\" when no source states it or a source contradicts it\\n- \\\"evidence_quote\\\": the exact sentence from a source that supports or contradicts it, copied verbatim (\\\"\\\" if none)\\n- \\\"source_url\\\": the URL of that source (\\\"\\\" if none)\\n- \\\"fix\\\": for partial or false, the corrected wording the sources support, or \\\"remove\\\"\\n\\nStrict rules:\\n- Saying something is undisclosed, unknown or unclear is \\\"false\\\" unless a source literally says it was not disclosed.\\n- Timing or sequence words are \\\"partial\\\" unless the sources give both dates and they support the wording.\\n- A role described as current is \\\"partial\\\" if the source gives it only as of an earlier date.\\n- Figures must match exactly, including currency and what they cover.\\n\\nOutput one JSON object: {\\\"claims\\\": [ ... ], \\\"summary\\\": \\\"one sentence\\\"}\";\nconst field = (f) => { for (const l of meta.split('\\n')) if (l.trim().startsWith(f + ':')) return l.trim().slice(f.length + 1).trim(); return ''; };\nconst articleForCheck = 'TITLE: ' + field('Title') + '\\nMETA: ' + field('Meta') + '\\n\\n' + body;\n\nreturn [{ json: {\n  chatId, isScheduled, output, hasDraft: !!(meta && body), body,\n  sources, dossierText: dossier ? dossier.text : '', notDisclosed: dossier ? (dossier.notDisclosed || []) : [],\n  request: {\n    model: cfg.models.factCheck, temperature: 0, max_tokens: 3000, response_format: { type: 'json_object' },\n    messages: [\n      { role: 'system', content: FACT_CHECK_PROMPT },\n      { role: 'user', content: 'ARTICLE:\\n' + articleForCheck + '\\n\\nSOURCE TEXTS:\\n\\n' +\n        sources.map(s => '=== ' + s.url + ' | ' + s.outlet + ' | published ' + (s.published || 'unknown') + ' ===\\n' + s.text).join('\\n\\n') }\n    ]\n  }\n}}];\n"
+      },
+      "name": "Extract Revised Draft",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "id": "3be6c269-1000-46b7-8673-203b6e9dcac5",
+      "position": [
+        6500,
+        1600
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.request) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "name": "Fact Check (2nd pass)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "credentials": {
+        "openAiApi": {
+          "id": "hi9jgbWx4TTKkRVO",
+          "name": "OpenAi account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput",
+      "id": "eb53b9ea-ef96-4bdf-9b14-bf0fcb7d582e",
+      "position": [
+        6760,
+        1600
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normalise for quote matching: case, whitespace, curly quotes and dashes vary between the\n// reader output and what a model copies back.\nconst norm = (s) => String(s || '').toLowerCase()\n  .replace(/[‘’‚′]/g, \"'\").replace(/[“”„″]/g, '\"')\n  .replace(/[‐-―−]/g, '-').replace(/ /g, ' ')\n  .replace(/[*_`]/g, '').replace(/\\s+/g, ' ').trim();\n// A quote counts as found if it appears verbatim (after normalising), or if one source sentence\n// contains at least 90% of its words - this tolerates a dropped comma, not a changed figure.\nconst words = (s) => norm(s).replace(/[^a-z0-9%$£€.\\- ]/g, ' ').split(/\\s+/)\n  .map(w => w.replace(/^[.\\-]+|[.\\-]+$/g, '')).filter(w => w.length > 1);\nconst quoteFound = (quote, text) => {\n  const q = norm(quote);\n  if (q.length < 12) return false;\n  const t = norm(text);\n  if (t.includes(q)) return true;\n  const qw = words(quote);\n  if (qw.length < 4) return false;\n  const nums = qw.filter(w => /\\d/.test(w));\n  for (const sent of t.split(/(?<=[.!?])\\s+|\\n+/)) {\n    const sw = new Set(words(sent));\n    const hit = qw.filter(w => sw.has(w)).length / qw.length;\n    // Every figure in the quote must be in the sentence: 90% overlap must not pass a changed number.\n    if (hit >= 0.9 && nums.every(n => sw.has(n))) return true;\n  }\n  return false;\n};\n\n// Deterministic checks that do not depend on the model's honesty.\nconst GATES = [\n  { re: /\\[[A-Z][^\\]]+,\\s+\\w+\\s+\\d{4}\\]/, why: 'bracket citation tag such as [Outlet, Month Year]' },\n  { re: /[\\[(](?:F|S)\\d{1,2}[\\])]/, why: 'internal dossier reference such as [S1] in the text' },\n  { re: /https?:\\/\\//i, why: 'raw URL in the article body (source links are appended by the workflow)' }\n];\nconst UNDISCLOSED = /\\b(undisclosed|not (?:been |yet )?disclosed|yet to (?:be )?(?:disclose|reveal|announce)|remains? (?:unclear|unknown|to be seen)|it is (?:not )?(?:unclear|unknown))\\b/i;\n\n// Pass 2 of the fact check. The model's verdicts are not taken on trust: a \"supported\"\n// claim whose evidence quote is not in a source is downgraded to partial.\nconst draft = $('Extract Revised Draft').first().json;\nconst cfg = $('Config').first().json.cfg;\nconst sources = draft.sources || [];\nconst allText = sources.map(s => s.text).join('\\n');\n\nlet claims = [];\nlet checkAvailable = false;\ntry {\n  const content = $json.choices && $json.choices[0] && $json.choices[0].message.content;\n  if (content) { claims = JSON.parse(content).claims || []; checkAvailable = true; }\n} catch (e) { checkAvailable = false; }\n\nclaims = claims.map(c => {\n  let verdict = String(c.supported).toLowerCase();\n  if (verdict !== 'true' && verdict !== 'partial') verdict = 'false';\n  let note = '';\n  if (verdict === 'true' && !quoteFound(c.evidence_quote, allText)) { verdict = 'partial'; note = 'evidence quote not found in the sources'; }\n  return { claim: String(c.claim || ''), verdict, evidence: String(c.evidence_quote || ''), url: String(c.source_url || ''), fix: String(c.fix || ''), note };\n});\n\nconst problems = claims.filter(c => c.verdict !== 'true');\nconst gateIssues = [];\nif (!draft.hasDraft) gateIssues.push('draft is missing the [BLOCK:METADATA] or [BLOCK:ARTICLE] block');\nif (!sources.length) gateIssues.push('no source texts to check against');\nif (!checkAvailable) gateIssues.push('fact check unavailable (OpenAI error or unparsable reply)');\nfor (const g of GATES) if (g.re.test(draft.body)) gateIssues.push(g.why);\n// Each \"undisclosed/unclear\" sentence must be about something a source said was withheld. One\n// genuinely undisclosed price must not license \"operational changes remain undisclosed\".\nconst GENERIC = new Set(['disclosed','undisclosed','disclose','details','detail','terms','were','been','with','that','this','from','have','which','about']);\nconst withheld = (draft.notDisclosed || []).map(x => words((x.detail || '') + ' ' + (x.quote || '')).filter(w => w.length > 3 && !GENERIC.has(w)));\nfor (const sent of String(draft.body).split(/(?<=[.!?])\\s+|\\n+/)) {\n  if (!UNDISCLOSED.test(sent)) continue;\n  const sw = new Set(words(sent));\n  if (!withheld.some(ws => ws.some(w => sw.has(w)))) {\n    gateIssues.push('says something is undisclosed/unclear that no source says was withheld: \"' + sent.trim().slice(0, 100) + '\"');\n  }\n}\n\nconst counts = {\n  total: claims.length,\n  supported: claims.filter(c => c.verdict === 'true').length,\n  partial: claims.filter(c => c.verdict === 'partial').length,\n  unsupported: claims.filter(c => c.verdict === 'false').length\n};\nconst clean = checkAvailable && draft.hasDraft && sources.length > 0 && problems.length === 0 && gateIssues.length === 0;\n\nconst REVISE_PROMPT = \"You correct a PromoMag.co.uk article after a fact check. You receive the ARTICLE (in [BLOCK:] format), the PROBLEMS found, and the VERIFIED DOSSIER.\\n\\nFor each problem: remove the claim, or replace it with the corrected wording given in the problem's fix or supported by the dossier. Remove every bracket citation tag, dossier reference and URL from the text. Do not add any new fact. Do not change sentences that have no problem, except to keep the prose grammatical after a removal. If a paragraph loses its only fact, delete the paragraph.\\n\\nReturn the complete corrected article in exactly the same [BLOCK:METADATA], [BLOCK:ARTICLE] and [BLOCK:SEO] format, including every closing [/BLOCK] tag, and nothing else. Correct the METADATA Title and Meta too if they repeat a problem.\";\nconst problemList = [\n  ...problems.map(p => '- ' + (p.verdict === 'false' ? 'UNSUPPORTED' : 'PARTIAL') + ': \"' + p.claim + '\"' + (p.fix ? ' -> fix: ' + p.fix : '') + (p.note ? ' (' + p.note + ')' : '')),\n  ...gateIssues.map(g => '- FORMAT: ' + g)\n].join('\\n');\n\nreturn [{ json: {\n  pass: 2, clean, checkAvailable, counts, problems, gateIssues,\n  chatId: draft.chatId, isScheduled: draft.isScheduled, output: draft.output, body: draft.body,\n  sources, dossierText: draft.dossierText, notDisclosed: draft.notDisclosed,\n  request: {\n    model: cfg.models.revise, temperature: 0.2, max_tokens: 4000,\n    messages: [\n      { role: 'system', content: REVISE_PROMPT },\n      { role: 'user', content: 'ARTICLE:\\n' + draft.output + '\\n\\nPROBLEMS:\\n' + problemList + '\\n\\nVERIFIED DOSSIER:\\n' + draft.dossierText }\n    ]\n  }\n}}];\n"
+      },
+      "name": "Assess Fact Check (2nd pass)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "id": "aa49a8dd-b98b-4660-b454-a85e010e2474",
+      "position": [
+        7020,
+        1600
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// The draft that leaves this node is the last one checked, with a verdict that Prepare Post enforces:\n// unverified drafts can be saved as WordPress drafts but never published.\nlet a = $('Assess Fact Check').first().json;\ntry { if ($('Assess Fact Check (2nd pass)').isExecuted) a = $('Assess Fact Check (2nd pass)').first().json; } catch (e) {}\nconst first = $('Assess Fact Check').first().json;\nconst verified = !!a.clean;\nconst revised = a.pass === 2;\n\nconst c = a.counts;\nlet summary = (verified ? '✅ Fact check passed' : '⛔ Fact check failed') +\n  (revised ? ' after one revision' : '') + ': ' + c.supported + ' of ' + c.total + ' claims supported by the sources';\nif (c.partial) summary += ', ' + c.partial + ' partial';\nif (c.unsupported) summary += ', ' + c.unsupported + ' unsupported';\nsummary += '.';\nif (revised && first.counts) summary += ' First draft had ' + (first.counts.partial + first.counts.unsupported) + ' problem claim(s).';\nconst issues = [...a.gateIssues, ...a.problems.slice(0, 3).map(p => (p.verdict === 'false' ? 'unsupported: ' : 'partial: ') + p.claim)];\nif (!verified && issues.length) summary += ' Issues: ' + issues.join('; ') + '.';\n\nreturn [{ json: {\n  chatId: a.chatId, isScheduled: a.isScheduled, output: a.output, verified, checkSummary: summary,\n  factCheck: { pass: a.pass, counts: c, problems: a.problems, gateIssues: a.gateIssues, firstPass: first.counts },\n  sources: (a.sources || []).map(s => ({ url: s.url, outlet: s.outlet, published: s.published }))\n}}];\n"
+      },
+      "name": "Finalise Draft",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "id": "b13dce0f-6cdf-47b7-9525-20129bf5f899",
+      "position": [
+        7280,
+        1700
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "25ed6350-e59a-4d98-a84e-1b6d18dd53a8",
+              "leftValue": "={{ $json.isScheduled }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Route Verified Draft",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "id": "dca043e4-84dc-4803-90e2-4c29013bd870",
+      "position": [
+        7540,
+        1700
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://promomag.co.uk/wp-json/wp/v2/posts?slug={{ encodeURIComponent($json.slug) }}&status=publish,future,draft,pending,private&_fields=id,status,link,slug",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          },
+          "timeout": 15000
+        }
+      },
+      "name": "Find Existing Post",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "jkmcRGFCJbTsbiYb",
+          "name": "n8n PromoMag"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "onError": "continueRegularOutput",
+      "id": "296f92fe-b927-4256-81cd-f5f7a0bc6bb6",
+      "position": [
+        11180,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// One article, one post. A draft with the same slug is updated in place (this is what turned\n// \"post to WordPress\" then \"publish\" into two posts); a live post is never overwritten.\nconst p = $('Prepare Post').first().json;\nconst res = $json || {};\nlet action = 'create', existingId = null, abortReason = '', existingLink = '';\n\nif (res.error || !Array.isArray(res.body)) {\n  action = 'abort';\n  abortReason = 'could not check WordPress for an existing post with this slug, so nothing was posted. Try again in a minute.';\n} else if (res.body.length) {\n  const e = res.body[0];\n  existingLink = e.link || '';\n  if (['publish', 'future', 'private'].includes(e.status)) {\n    action = 'abort';\n    abortReason = 'a post with this slug is already ' + (e.status === 'publish' ? 'live' : e.status) + ' (ID ' + e.id + '). Nothing was changed; edit it in WP Admin instead.';\n    existingId = e.id;\n  } else {\n    action = 'update';\n    existingId = e.id;\n  }\n}\n\nreturn [{ json: { ...p, action, existingId, existingLink, abortReason } }];\n"
+      },
+      "name": "Decide Post Action",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "id": "3014e4da-f655-449a-8031-faaec3f63fb8",
+      "position": [
+        11440,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "39f0aa53-dced-4514-a392-52f3b73741d8",
+              "leftValue": "={{ $json.action === 'abort' }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Abort Post?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "id": "563fab85-a177-4e1a-bbb7-91c90aeb7bcf",
+      "position": [
+        11700,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "9ffde723-88ac-49c7-abc2-f09bfb55065b",
+              "leftValue": "={{ $json.useTestTopic }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Use Test Topic?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "id": "be6c70f3-5169-4557-b2b6-3b96c9b73776",
+      "position": [
+        1040,
+        200
+      ]
     }
   ],
   "connections": {
@@ -2310,7 +3076,7 @@
       "main": [
         [
           {
-            "node": "ToC Agent",
+            "node": "Build Source Search",
             "type": "main",
             "index": 0
           }
@@ -2379,6 +3145,13 @@
             "type": "main",
             "index": 0
           }
+        ],
+        [
+          {
+            "node": "Format AI Error",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
@@ -2386,7 +3159,7 @@
       "main": [
         [
           {
-            "node": "Parse Blocks",
+            "node": "Extract Draft",
             "type": "main",
             "index": 0
           }
@@ -2482,7 +3255,7 @@
       "main": [
         [
           {
-            "node": "Build News Query",
+            "node": "Use Test Topic?",
             "type": "main",
             "index": 0
           }
@@ -2591,7 +3364,7 @@
       "main": [
         [
           {
-            "node": "Write Scheduled Article",
+            "node": "Build Source Search",
             "type": "main",
             "index": 0
           }
@@ -2602,7 +3375,7 @@
       "main": [
         [
           {
-            "node": "Parse Scheduled Blocks",
+            "node": "Extract Draft",
             "type": "main",
             "index": 0
           }
@@ -2955,7 +3728,7 @@
       "main": [
         [
           {
-            "node": "Split Tag Names",
+            "node": "Find Existing Post",
             "type": "main",
             "index": 0
           }
@@ -3066,16 +3839,6 @@
             "index": 0
           },
           {
-            "node": "Write Article",
-            "type": "ai_languageModel",
-            "index": 0
-          },
-          {
-            "node": "Write Scheduled Article",
-            "type": "ai_languageModel",
-            "index": 0
-          },
-          {
             "node": "Social Pack Agent",
             "type": "ai_languageModel",
             "index": 0
@@ -3089,6 +3852,375 @@
           {
             "node": "Research Agent",
             "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Use Test Topic?": {
+      "main": [
+        [
+          {
+            "node": "Auto-Select Top Topic",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build News Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Source Search": {
+      "main": [
+        [
+          {
+            "node": "Search Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Sources": {
+      "main": [
+        [
+          {
+            "node": "Pick Source URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick Source URLs": {
+      "main": [
+        [
+          {
+            "node": "Fetch Article Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Article Text": {
+      "main": [
+        [
+          {
+            "node": "Build Source Pack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Source Pack": {
+      "main": [
+        [
+          {
+            "node": "Have Sources?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Have Sources?": {
+      "main": [
+        [
+          {
+            "node": "Extract Dossier",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Parse Dossier",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Dossier": {
+      "main": [
+        [
+          {
+            "node": "Parse Dossier",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Dossier": {
+      "main": [
+        [
+          {
+            "node": "Route Dossier",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Dossier": {
+      "main": [
+        [
+          {
+            "node": "Build ToC From Dossier",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format Dossier Failure",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Scheduled Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format Scheduled Skip",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build ToC From Dossier": {
+      "main": [
+        [
+          {
+            "node": "ToC Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Dossier Failure": {
+      "main": [
+        [
+          {
+            "node": "Send Dossier Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Scheduled Prompt": {
+      "main": [
+        [
+          {
+            "node": "Write Scheduled Article",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Scheduled Skip": {
+      "main": [
+        [
+          {
+            "node": "Send Scheduled Skip",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Draft": {
+      "main": [
+        [
+          {
+            "node": "Fact Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fact Check": {
+      "main": [
+        [
+          {
+            "node": "Assess Fact Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assess Fact Check": {
+      "main": [
+        [
+          {
+            "node": "Needs Revision?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Needs Revision?": {
+      "main": [
+        [
+          {
+            "node": "Revise Draft",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Finalise Draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Revise Draft": {
+      "main": [
+        [
+          {
+            "node": "Extract Revised Draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Revised Draft": {
+      "main": [
+        [
+          {
+            "node": "Fact Check (2nd pass)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fact Check (2nd pass)": {
+      "main": [
+        [
+          {
+            "node": "Assess Fact Check (2nd pass)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assess Fact Check (2nd pass)": {
+      "main": [
+        [
+          {
+            "node": "Finalise Draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finalise Draft": {
+      "main": [
+        [
+          {
+            "node": "Route Verified Draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Verified Draft": {
+      "main": [
+        [
+          {
+            "node": "Parse Scheduled Blocks",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Parse Blocks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Existing Post": {
+      "main": [
+        [
+          {
+            "node": "Decide Post Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decide Post Action": {
+      "main": [
+        [
+          {
+            "node": "Abort Post?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Abort Post?": {
+      "main": [
+        [
+          {
+            "node": "Format Publish Result",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Split Tag Names",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Writer LLM": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Write Article",
+            "type": "ai_languageModel",
+            "index": 0
+          },
+          {
+            "node": "Write Scheduled Article",
+            "type": "ai_languageModel",
             "index": 0
           }
         ]
